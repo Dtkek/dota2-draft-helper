@@ -119,9 +119,11 @@ const orDash = (v) => (v === null || v === undefined ? '—' : v);
 const cls = (v) => (v > 0 ? 'pos' : v < 0 ? 'neg' : 'dim');
 
 // ---------------------------------------------------------------- вкладки
-document.querySelectorAll('.tab').forEach((tab) => {
+// Только настоящие вкладки — с data-view. Класс .tab используется и для
+// оформления обычных кнопок; ловить их клики здесь нельзя.
+document.querySelectorAll('.tabs .tab[data-view]').forEach((tab) => {
   tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+    document.querySelectorAll('.tabs .tab').forEach((t) => t.classList.remove('active'));
     document.querySelectorAll('.view').forEach((v) => v.classList.remove('active'));
     tab.classList.add('active');
     $('#view-' + tab.dataset.view).classList.add('active');
