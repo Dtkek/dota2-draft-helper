@@ -5,22 +5,29 @@
 один раз выдать терминалу право «Запись экрана» в настройках приватности,
 иначе кадр вернётся чёрным.
 """
-import numpy as np
+# Оба импорта обязательно под защитой: модуль читают и тогда, когда пакеты
+# ещё не установлены — чтобы показать список недостающих. Незащищённый
+# импорт здесь ронял весь запрос статуса вместо понятной подсказки.
+try:
+    import numpy as np
+    NUMPY_OK = True
+except ImportError:
+    NUMPY_OK = False
 
 try:
     import mss
     MSS_OK = True
-except ImportError:  # пакет не установлен — модуль зрения просто отключится
+except ImportError:
     MSS_OK = False
 
 
 def available():
-    return MSS_OK
+    return MSS_OK and NUMPY_OK
 
 
 def monitors():
     """Список мониторов: [{'index', 'left', 'top', 'width', 'height'}]."""
-    if not MSS_OK:
+    if not available():
         return []
     out = []
     with mss.mss() as sct:
@@ -42,8 +49,9 @@ def grab(monitor=1, region=None):
     monitor — индекс из monitors(); region — (left, top, width, height)
     в долях от 0 до 1 относительно монитора, чтобы не зависеть от разрешения.
     """
-    if not MSS_OK:
-        raise RuntimeError("не установлен пакет mss — захват экрана недоступен")
+    if not available():
+        missing = [n for n, ok in (("numpy", NUMPY_OK), ("mss", MSS_OK)) if not ok]
+        raise RuntimeError("не установлены пакеты: " + ", ".join(missing))
     with mss.mss() as sct:
         mons = sct.monitors
         idx = monitor if 0 <= monitor < len(mons) else (1 if len(mons) > 1 else 0)

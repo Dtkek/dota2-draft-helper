@@ -44,7 +44,13 @@ def get_watcher():
 
 
 def vision_status():
-    from vision import capture, icons
+    """Состояние чтения экрана.
+
+    Функция обязана отвечать и тогда, когда пакеты зрения не установлены:
+    её задача в этом случае — сказать, чего не хватает. Поэтому всё, что
+    тянет opencv, numpy или mss, импортируется только после проверки.
+    """
+    from vision import icons  # зависит лишь от стандартной библиотеки
     src = get_source()
     have = len(icons.available_ids())
     total = len(src.hero_stats())
@@ -52,9 +58,12 @@ def vision_status():
         "available": vision.AVAILABLE,
         "hint": vision.requirements_hint(),
         "icons": {"have": have, "total": total, "ready": have >= total * 0.95},
-        "monitors": capture.monitors() if vision.AVAILABLE else [],
+        "monitors": [],
         "state": None,
     }
+    if vision.AVAILABLE:
+        from vision import capture
+        out["monitors"] = capture.monitors()
     if vision.AVAILABLE and have:
         w = get_watcher()
         out["state"] = w.state()
