@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Драфт-хелпер Dota 2</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header>
+  <h1>Драфт-хелпер <span>Dota 2</span></h1>
+  <nav class="tabs">
+    <button class="tab active" data-view="draft">Драфт</button>
+    <button class="tab" data-view="meta">Мета</button>
+    <button class="tab" data-view="pro">Про-матчи</button>
+  </nav>
+  <div class="spacer"></div>
+  <div class="src" id="src-label">источник: —</div>
+</header>
+
+<main>
+  <!-- ===================== ДРАФТ ===================== -->
+  <section class="view active" id="view-draft">
+    <div class="note">
+      Матчапы считаются по профессиональным матчам OpenDota. Выборка небольшая —
+      медиана около 30 игр на пару героев, поэтому к каждому преимуществу применяется
+      сглаживание, а в колонке «выборка» видно, на скольких играх основан совет.
+      Синергия своих героев между собой не учитывается: у OpenDota таких данных нет.
+    </div>
+
+    <div class="row">
+      <div class="col" style="flex: 1 1 460px">
+        <div class="card">
+          <h2>Драфт</h2>
+          <div class="mode" id="mode">
+            <button data-mode="enemy" class="active">Враги</button>
+            <button data-mode="ally">Свои</button>
+            <button data-mode="banned">Баны</button>
+          </div>
+          <div style="margin-bottom:10px">
+            <label>Враги</label>
+            <div class="slots" id="slots-enemy"></div>
+          </div>
+          <div style="margin-bottom:10px">
+            <label>Свои</label>
+            <div class="slots" id="slots-ally"></div>
+          </div>
+          <div>
+            <label>Баны</label>
+            <div class="slots" id="slots-banned"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Чтение экрана</h2>
+          <div id="vision-status" class="dim">Проверяю…</div>
+          <div id="vision-controls" hidden>
+            <div class="controls" style="margin-top:10px">
+              <div><label>Монитор</label><select id="vis-monitor"></select></div>
+              <div><label>Область</label>
+                <select id="vis-region">
+                  <option value="0,0,1,0.55">Верхняя половина</option>
+                  <option value="0,0,1,1">Весь экран</option>
+                  <option value="0,0,1,0.35">Верхняя треть</option>
+                </select>
+              </div>
+              <div><label>Опрос</label>
+                <select id="vis-interval">
+                  <option value="1">1 с</option>
+                  <option value="2" selected>2 с</option>
+                  <option value="4">4 с</option>
+                </select>
+              </div>
+              <div><label>Моя сторона</label>
+                <select id="vis-side">
+                  <option value="none">не делить — всё во враги</option>
+                  <option value="left">слева</option>
+                  <option value="right">справа</option>
+                </select>
+              </div>
+            </div>
+            <div class="mode" style="margin-top:10px">
+              <button id="vis-start">Включить слежение</button>
+              <button id="vis-stop">Остановить</button>
+              <button id="vis-scan">Сканировать сейчас</button>
+              <button id="vis-icons">Скачать портреты</button>
+            </div>
+            <div id="vision-out" class="empty-hint">Слежение выключено.</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Выбор героя</h2>
+          <input type="text" id="hero-search" placeholder="Начните вводить имя героя…" autocomplete="off">
+          <div class="hero-grid" id="hero-grid" style="margin-top:10px"></div>
+        </div>
+      </div>
+
+      <div class="col" style="flex: 2 1 560px">
+        <div class="card">
+          <h2>Кого брать</h2>
+          <div class="controls">
+            <div><label>Ранг</label><select id="bracket"></select></div>
+            <div><label>Роль</label><select id="role"></select></div>
+            <div><label>Показать</label>
+              <select id="limit">
+                <option>10</option><option selected>15</option>
+                <option>25</option><option>40</option>
+              </select>
+            </div>
+          </div>
+          <div id="rec-out"><div class="empty-hint">Выберите хотя бы одного героя противника.</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== МЕТА ===================== -->
+  <section class="view" id="view-meta">
+    <div class="card">
+      <h2>Мета по героям</h2>
+      <div class="controls">
+        <div><label>Ранг</label><select id="meta-bracket"></select></div>
+        <div><label>Роль</label><select id="meta-role"></select></div>
+      </div>
+      <div id="meta-out" class="loading">Загрузка…</div>
+    </div>
+  </section>
+
+  <!-- ===================== ПРО-МАТЧИ ===================== -->
+  <section class="view" id="view-pro">
+    <div class="row">
+      <div class="col" style="flex:1 1 340px">
+        <div class="card">
+          <h2>Последние про-матчи</h2>
+          <div id="pro-list" class="scroll loading">Загрузка…</div>
+        </div>
+      </div>
+      <div class="col" style="flex:2 1 620px">
+        <div class="card">
+          <h2>Разбор матча</h2>
+          <div id="pro-detail"><div class="empty-hint">Выберите матч слева.</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
