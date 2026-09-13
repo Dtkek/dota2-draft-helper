@@ -304,19 +304,20 @@ class Handler(BaseHTTPRequestHandler):
 
             if url.path == "/api/heroes":
                 heroes = hero_list(src)
-                stale = getattr(src, "using_fallback", False)
+                snapshot = getattr(src, "using_fallback", False)
+                from sources import opendota as od
                 return self._json({
                     "heroes": heroes,
                     "brackets": src.available_brackets(),
                     "positions": [{"key": k, "label": v}
                                   for k, v in POSITION_LABELS],
                     "source": src.name,
-                    "offline": stale,
-                    "offline_note": (
-                        "Нет связи с OpenDota — работаю на локальном снимке "
-                        "справочника героев. Подбор по матчапам будет "
-                        "недоступен: для него нужны свежие данные."
-                    ) if stale else None,
+                    "snapshot": snapshot,
+                    "snapshot_note": (
+                        f"Справочник героев взят из снимка от {od.fallback_date}; "
+                        "свежие данные подтягиваются в фоне и появятся при "
+                        "следующем обновлении страницы."
+                    ) if snapshot else None,
                 })
             if url.path == "/api/meta":
                 bracket, note = resolve_bracket(src, q.get("bracket", ["all"])[0])
@@ -434,14 +435,18 @@ def main():
         print(msg, flush=True)
 
     src = get_source()
-    say(f"Источник данных: {src.name}. Проверяю доступ к api.opendota.com…")
+    say(f"Источник данных: {src.name}.")
     try:
         heroes = src.hero_stats()
-        say(f"  ок, героев получено: {len(heroes)}")
+        if getattr(src, "using_fallback", False):
+            from sources import opendota as od
+            say(f"  справочник героев: снимок от {od.fallback_date}, "
+                f"{len(heroes)} героев. Свежие данные подтягиваю в фоне.")
+        else:
+            say(f"  справочник героев: {len(heroes)} героев из кэша или сети.")
     except Exception as e:  # noqa: BLE001 — сервер поднимаем в любом случае
-        say(f"  НЕ УДАЛОСЬ: {e}")
-        say("  Без доступа к api.opendota.com подбор работать не будет.")
-        say("  Проверьте интернет, VPN и брандмауэр, затем перезапустите.")
+        say(f"  справочник героев НЕ ЗАГРУЖЕН: {e}")
+        say("  Запустите diagnose.bat, чтобы понять причину.")
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://{args.host}:{args.port}"

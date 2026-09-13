@@ -96,12 +96,13 @@ async function boot() {
     state.heroes = data.heroes;
     state.byId = new Map(data.heroes.map((h) => [h.id, h]));
     state.brackets = data.brackets;
-    $('#src-label').textContent = data.offline
-      ? 'источник: локальный снимок'
+    $('#src-label').textContent = data.snapshot
+      ? 'источник: ' + data.source + ' (снимок)'
       : 'источник: ' + data.source;
-    if (data.offline_note) {
-      const warn = el('div', 'error', data.offline_note);
-      $('#rec-out').parentNode.insertBefore(warn, $('#rec-out'));
+    if (data.snapshot_note) {
+      const note = el('div', 'dim', data.snapshot_note);
+      note.style.marginBottom = '8px';
+      $('#rec-out').parentNode.insertBefore(note, $('#rec-out'));
     }
 
     const roles = new Set();

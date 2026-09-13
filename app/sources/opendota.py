@@ -93,21 +93,30 @@ class OpenDotaSource(HeroSource):
         return get_json(f"{API}/heroes", ttl=TTL_HEROES)
 
     def hero_stats(self):
-        """Справочник героев. При недоступной сети — локальный снимок.
+        """Справочник героев: свежий кэш → снимок с фоновым обновлением → сеть.
 
-        Без снимка холодный запуск на плохом канале давал пустой интерфейс:
-        без списка героев не работает вообще ничего.
+        Тот же порядок, что у матчапов, и по той же причине: на медленном
+        канале поход в сеть за справочником занимал до полутора минут, и всё
+        это время сервер даже не стартовал — окно выглядело зависшим.
+        Со снимком запуск мгновенный, а свежие данные подтягиваются фоном
+        и подхватятся на следующем запросе.
         """
-        try:
-            data = get_json(f"{API}/heroStats", ttl=TTL_STATS)
+        url = f"{API}/heroStats"
+
+        fresh = net.cached(url, TTL_STATS)
+        if fresh is not None:
             OpenDotaSource.using_fallback = False
-            return data
-        except Exception:  # noqa: BLE001 — сеть подвела, пробуем снимок
-            snapshot = _load_fallback()
-            if snapshot is None:
-                raise
+            return fresh
+
+        snapshot = _load_fallback()
+        if snapshot is not None:
             OpenDotaSource.using_fallback = True
+            net.refresh_in_background(url, TTL_STATS)
             return snapshot
+
+        data = get_json(url, ttl=TTL_STATS)
+        OpenDotaSource.using_fallback = False
+        return data
 
     def matchups(self, hero_id):
         """Матчапы героя. Снимок в приоритете, сеть — фоном.
