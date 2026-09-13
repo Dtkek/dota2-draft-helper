@@ -417,10 +417,28 @@ def main():
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
 
+    # Прогреваем справочник до старта сервера: так в консоли сразу видно,
+    # есть ли доступ к OpenDota. Иначе пользователь видит пустой интерфейс
+    # и не понимает, грузится он или сломался.
+    # flush обязателен: вывод в stdout буферизуется, и сообщения о ходе
+    # запуска пользователь увидел бы только под конец, а нужны они сразу
+    def say(msg):
+        print(msg, flush=True)
+
+    src = get_source()
+    say(f"Источник данных: {src.name}. Проверяю доступ к api.opendota.com…")
+    try:
+        heroes = src.hero_stats()
+        say(f"  ок, героев получено: {len(heroes)}")
+    except Exception as e:  # noqa: BLE001 — сервер поднимаем в любом случае
+        say(f"  НЕ УДАЛОСЬ: {e}")
+        say("  Без доступа к api.opendota.com подбор работать не будет.")
+        say("  Проверьте интернет, VPN и брандмауэр, затем перезапустите.")
+
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://{args.host}:{args.port}"
-    print(f"Драфт-хелпер запущен: {url}")
-    print(f"Источник данных: {get_source().name}. Ctrl+C — остановить.")
+    say(f"\nДрафт-хелпер запущен: {url}")
+    say("Ctrl+C — остановить.")
     if not args.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:

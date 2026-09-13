@@ -33,9 +33,33 @@ const el = (tag, cls, text) => {
   return n;
 };
 
+// Таймаут обязателен: без него неотвечающий запрос оставляет интерфейс
+// пустым навсегда, и непонятно, грузится он или сломался.
+const API_TIMEOUT_MS = 120000;
+
 async function api(path, opts) {
-  const res = await fetch(path, opts);
-  const data = await res.json();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), API_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(path, Object.assign({ signal: ctrl.signal }, opts || {}));
+  } catch (e) {
+    clearTimeout(timer);
+    if (e.name === 'AbortError') {
+      throw new Error(
+        `сервер не ответил за ${API_TIMEOUT_MS / 1000} с (${path}). ` +
+        'Обычно это значит, что нет доступа к api.opendota.com — ' +
+        'проверьте интернет, VPN или брандмауэр.');
+    }
+    throw new Error(`не удалось связаться с сервером (${path}): ${e.message}`);
+  }
+  clearTimeout(timer);
+  let data;
+  try {
+    data = await res.json();
+  } catch (e) {
+    throw new Error(`сервер вернул не JSON (HTTP ${res.status})`);
+  }
   if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
@@ -62,6 +86,11 @@ document.querySelectorAll('.tab').forEach((tab) => {
 
 // ---------------------------------------------------------------- загрузка справочника
 async function boot() {
+  // Показываем, что идёт загрузка: первый запуск тянет справочник героев
+  // из OpenDota, и без подсказки пустой интерфейс выглядит как поломка.
+  $('#hero-grid').innerHTML =
+    '<div class="loading">Загружаю справочник героев из OpenDota…</div>';
+  $('#src-label').textContent = 'загрузка…';
   try {
     const data = await api('/api/heroes');
     state.heroes = data.heroes;
@@ -84,8 +113,34 @@ async function boot() {
     renderSlots();
     visionBoot();
   } catch (e) {
-    showError($('#rec-out'), e);
+    bootFailed(e);
   }
+}
+
+function bootFailed(err) {
+  $('#src-label').textContent = 'источник недоступен';
+  const grid = $('#hero-grid');
+  grid.innerHTML = '';
+  grid.style.display = 'block';
+  grid.appendChild(el('div', 'error', 'Не удалось загрузить героев. ' + err.message));
+
+  const retry = el('button', 'tab', 'Попробовать снова');
+  retry.style.marginTop = '10px';
+  retry.addEventListener('click', () => {
+    grid.style.display = '';
+    boot();
+  });
+  grid.appendChild(retry);
+
+  const hint = el('div', 'dim');
+  hint.style.marginTop = '10px';
+  hint.textContent = 'Приложению нужен доступ к api.opendota.com. ' +
+    'Если он закрыт, подбор работать не будет: все данные берутся оттуда. ' +
+    'Подробности ошибки видны в окне, из которого запущен сервер.';
+  grid.appendChild(hint);
+
+  $('#vision-status').textContent =
+    'Недоступно, пока не загрузится справочник героев.';
 }
 
 function fillSelect(sel, pairs) {
