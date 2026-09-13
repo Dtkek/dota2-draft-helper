@@ -75,6 +75,10 @@ def vision_status():
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 CDN = "https://cdn.cloudflare.steamstatic.com"
 
+# Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
+# первым делом нужно понять, какой код на самом деле запущен.
+VERSION = "2026-09-13.11"
+
 MIME = {
     ".html": "text/html; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
@@ -264,9 +268,26 @@ def pro_match_detail(source, match_id):
 class Handler(BaseHTTPRequestHandler):
     server_version = "DraftHelper/1.0"
 
-    def log_message(self, fmt, *args):  # тише в консоли
-        if "/api/" in (args[0] if args else ""):
-            sys.stderr.write("  %s\n" % (fmt % args))
+    def log_message(self, fmt, *args):
+        # Стандартный лог отключён: вместо него печатаем каждый запрос к API
+        # с временем ответа, см. _timed. По такому логу видно, что именно
+        # тормозит, без отдельной диагностики.
+        pass
+
+    def _timed(self, method, fn):
+        import time
+        path = self.path.split("?")[0]
+        if not path.startswith("/api/"):
+            return fn()
+        started = time.time()
+        sys.stderr.write(f"  {method} {path} …\n")
+        sys.stderr.flush()
+        try:
+            return fn()
+        finally:
+            ms = (time.time() - started) * 1000
+            sys.stderr.write(f"  {method} {path} — {ms:.0f} мс\n")
+            sys.stderr.flush()
 
     # --- ответы --------------------------------------------------------
     def _json(self, payload, status=200):
@@ -287,11 +308,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", MIME.get(ext, "application/octet-stream"))
         self.send_header("Content-Length", str(len(body)))
+        # без этого браузер после обновления кода подсовывает старый app.js
+        # к новому серверу, и поведение становится необъяснимым
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(body)
 
     # --- маршруты ------------------------------------------------------
     def do_GET(self):
+        return self._timed("GET", self._do_get)
+
+    def do_POST(self):
+        return self._timed("POST", self._do_post)
+
+    def _do_get(self):
         url = urlparse(self.path)
         q = parse_qs(url.query)
         src = get_source()
@@ -312,6 +342,7 @@ class Handler(BaseHTTPRequestHandler):
                     "positions": [{"key": k, "label": v}
                                   for k, v in POSITION_LABELS],
                     "source": src.name,
+                    "version": VERSION,
                     "snapshot": snapshot,
                     "snapshot_note": (
                         f"Справочник героев взят из снимка от {od.fallback_date}; "
@@ -351,7 +382,7 @@ class Handler(BaseHTTPRequestHandler):
             traceback.print_exc()
             return self._json({"error": str(e)}, 500)
 
-    def do_POST(self):
+    def _do_post(self):
         url = urlparse(self.path)
         src = get_source()
         try:
@@ -435,7 +466,7 @@ def main():
         print(msg, flush=True)
 
     src = get_source()
-    say(f"Источник данных: {src.name}.")
+    say(f"Драфт-хелпер, версия {VERSION}. Источник данных: {src.name}.")
     try:
         heroes = src.hero_stats()
         if getattr(src, "using_fallback", False):

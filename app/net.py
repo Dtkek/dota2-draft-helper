@@ -126,13 +126,32 @@ def cached(url, ttl=3600):
     return _read_cache(url, ttl)
 
 
+_refreshing = set()
+_refresh_lock = threading.Lock()
+
+
 def refresh_in_background(url, ttl=3600):
-    """Обновляет кэш по-тихому, не задерживая ответ пользователю."""
+    """Обновляет кэш по-тихому, не задерживая ответ пользователю.
+
+    На один url — не больше одного потока. Без этой защиты каждый запрос
+    страницы плодил десяток одновременных скачиваний одного и того же:
+    hero_stats() зовут отовсюду, и пока кэш пуст, все они просили обновление.
+    На медленном канале такой шторм душил сам себя.
+    """
+    with _refresh_lock:
+        if url in _refreshing:
+            return None
+        _refreshing.add(url)
+
     def worker():
         try:
             get_json(url, ttl=0)
         except Exception:  # noqa: BLE001 — фоновое обновление не критично
             pass
+        finally:
+            with _refresh_lock:
+                _refreshing.discard(url)
+
     t = threading.Thread(target=worker, daemon=True)
     t.start()
     return t

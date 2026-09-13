@@ -96,9 +96,9 @@ async function boot() {
     state.heroes = data.heroes;
     state.byId = new Map(data.heroes.map((h) => [h.id, h]));
     state.brackets = data.brackets;
-    $('#src-label').textContent = data.snapshot
+    $('#src-label').textContent = (data.snapshot
       ? 'источник: ' + data.source + ' (снимок)'
-      : 'источник: ' + data.source;
+      : 'источник: ' + data.source) + ' · v' + (data.version || '?');
     if (data.snapshot_note) {
       const note = el('div', 'dim', data.snapshot_note);
       note.style.marginBottom = '8px';
