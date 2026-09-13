@@ -63,6 +63,23 @@ def _to_gray(img):
     return img
 
 
+def read_image(path):
+    """Читает картинку так, чтобы путь с кириллицей не был проблемой.
+
+    cv2.imread на Windows молча возвращает None, если в пути есть
+    не-ASCII символы — например, «Рабочий стол» или папка с русским
+    названием. Ошибки нет, файлов «нет», распознавать нечем. Чтение
+    через numpy + imdecode от пути не зависит.
+    """
+    try:
+        data = np.fromfile(path, dtype=np.uint8)
+    except OSError:
+        return None
+    if data.size == 0:
+        return None
+    return cv2.imdecode(data, cv2.IMREAD_COLOR)
+
+
 def _normalize(vec):
     vec = vec.astype(np.float32).ravel()
     vec -= vec.mean()
@@ -103,7 +120,7 @@ class Recognizer:
         rows = []
         for hero_id in icons.available_ids():
             path = icons.portrait_path(hero_id)
-            img = cv2.imread(path, cv2.IMREAD_COLOR)
+            img = read_image(path)
             if img is None:
                 continue
             # для поиска по кадру нужен серый шаблон (так быстрее),
@@ -283,6 +300,51 @@ class Recognizer:
             elif len(verified) == 2 and mean_score < PAIR_HIT_SCORE:
                 verified = []
         return verified, int(used_width * inv)
+
+
+def self_test(recognizer, count=5, tile_w=110, screen=(1920, 594)):
+    """Проверка распознавания на месте: кладём свои же эталоны на тёмный
+    кадр и смотрим, находятся ли они. Не зависит ни от игры, ни от захвата.
+
+    Возвращает словарь с итогом: сколько положили, сколько нашли, время.
+    Если здесь провал — сломано что-то в самом распознавателе или в его
+    окружении (opencv, numpy, эталоны), а не в захвате экрана.
+    """
+    import random
+    import time
+
+    if not recognizer.ready:
+        return {"ok": False, "placed": 0, "found": 0,
+                "reason": "нет загруженных эталонов"}
+
+    ids = random.sample(recognizer.ids, min(count, len(recognizer.ids)))
+    w, h = screen
+    frame = np.full((h, w, 3), 24, dtype=np.uint8)
+    th = int(round(tile_w * 9 / 16))
+    gap = 16
+    x = (w - (len(ids) * tile_w + (len(ids) - 1) * gap)) // 2
+    y = 40
+    for hid in ids:
+        tmpl = read_image(icons.portrait_path(hid))
+        if tmpl is None:
+            continue
+        frame[y:y + th, x:x + tile_w] = cv2.resize(tmpl, (tile_w, th),
+                                                   interpolation=cv2.INTER_AREA)
+        x += tile_w + gap
+
+    started = time.time()
+    hits, width = recognizer.scan(frame)
+    found = {hh["hero_id"] for hh in hits}
+    ok = found == set(ids)
+    return {
+        "ok": ok,
+        "placed": len(ids),
+        "found": len(found & set(ids)),
+        "extra": len(found - set(ids)),
+        "seconds": round(time.time() - started, 1),
+        "width": width,
+        "missing": [recognizer.name(i) for i in ids if i not in found],
+    }
 
 
 def _iou(a, b):

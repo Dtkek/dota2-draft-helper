@@ -70,14 +70,27 @@ def vision_status():
         out["state"] = w.state()
         out["config"] = {"monitor": w.monitor, "interval": w.interval,
                          "region": list(w.region)}
+        # файлов на диске и эталонов в распознавателе может быть разное
+        # число: на Windows cv2.imread молчит на путях с кириллицей
+        out["templates_loaded"] = len(w.recognizer.ids)
+        out["assets_dir"] = icons.ASSETS
     return out
+
+
+def vision_self_test():
+    """Самопроверка распознавания на собственных эталонах."""
+    from vision import recognize
+    w = get_watcher()
+    if not w.recognizer.ready:
+        w.reload_templates()
+    return recognize.self_test(w.recognizer)
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-13.17"
+VERSION = "2026-09-13.18"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -377,6 +390,10 @@ class Handler(BaseHTTPRequestHandler):
 
             if url.path == "/api/vision/status":
                 return self._json(vision_status())
+            if url.path == "/api/vision/selftest":
+                if not vision.AVAILABLE:
+                    return self._json({"error": vision.requirements_hint()}, 400)
+                return self._json(vision_self_test())
             if url.path == "/api/vision/state":
                 if not vision.AVAILABLE:
                     return self._json({"error": vision.requirements_hint()}, 400)
@@ -509,6 +526,33 @@ def main():
     except Exception as e:  # noqa: BLE001 — сервер поднимаем в любом случае
         say(f"  справочник героев НЕ ЗАГРУЖЕН: {e}")
         say("  Запустите diagnose.bat, чтобы понять причину.")
+
+    # Самопроверка распознавания при старте: находит ли распознаватель
+    # собственные эталоны. Если нет — проблема не в игре и не в захвате.
+    if vision.AVAILABLE:
+        try:
+            from vision import icons
+            have = len(icons.available_ids())
+            if have:
+                res = vision_self_test()
+                loaded = len(get_watcher().recognizer.ids)
+                if res.get("ok"):
+                    say(f"  распознавание: самопроверка ок "
+                        f"({res['found']}/{res['placed']} за {res['seconds']} с, "
+                        f"эталонов загружено {loaded} из {have} файлов)")
+                else:
+                    say(f"  распознавание: САМОПРОВЕРКА НЕ ПРОШЛА — "
+                        f"найдено {res.get('found', 0)} из {res.get('placed', 0)}, "
+                        f"эталонов загружено {loaded} из {have} файлов. "
+                        f"{res.get('reason', '')}")
+                    say(f"  папка эталонов: {icons.ASSETS}")
+            else:
+                say("  распознавание: портреты героев ещё не скачаны — "
+                    "скачаются при первом запуске слежения")
+        except Exception as e:  # noqa: BLE001 — самопроверка не должна ронять старт
+            say(f"  распознавание: самопроверка упала: {type(e).__name__}: {e}")
+    else:
+        say(f"  распознавание отключено: {vision.requirements_hint()}")
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://{args.host}:{args.port}"

@@ -432,11 +432,21 @@ async function visionBoot() {
       $('#vis-interval').value = String(st.config.interval);
     }
     const ic = st.icons;
-    box.textContent = ic.ready
-      ? `Готово. Эталонов героев: ${ic.have} из ${ic.total}.`
-      : `Портретов героев: ${ic.have} из ${ic.total}. Они скачаются сами при ` +
-        `первом запуске слежения — это займёт около минуты. Можно и заранее, ` +
-        `кнопкой «Скачать портреты».`;
+    const loaded = st.templates_loaded;
+    if (ic.ready && loaded !== undefined && loaded < ic.have) {
+      // файлы есть, а распознаватель их не прочитал — раньше это было
+      // невидимо и выглядело как «не распознаёт»
+      box.innerHTML = '';
+      box.appendChild(el('div', 'error',
+        `Файлов портретов ${ic.have}, но в распознаватель загружено только ${loaded}. ` +
+        `Папка: ${st.assets_dir}. Пришлите этот текст.`));
+    } else {
+      box.textContent = ic.ready
+        ? `Готово. Эталонов героев: ${ic.have} из ${ic.total}, загружено ${loaded}.`
+        : `Портретов героев: ${ic.have} из ${ic.total}. Они скачаются сами при ` +
+          `первом запуске слежения — это займёт около минуты. Можно и заранее, ` +
+          `кнопкой «Скачать портреты».`;
+    }
   } catch (e) {
     showError(box, e);
   }
@@ -507,6 +517,28 @@ $('#vis-file').addEventListener('change', async (e) => {
     renderVision(data);
   } catch (err) { showError(out, err); }
   e.target.value = '';
+});
+
+// Самопроверка: распознаватель ищет свои же эталоны на синтетическом кадре.
+// Провал здесь — поломка самого распознавания, а не захвата или игры.
+$('#vis-selftest').addEventListener('click', async () => {
+  const out = $('#vision-out');
+  out.innerHTML = '<div class="loading">Самопроверка распознавания…</div>';
+  try {
+    const r = await api('/api/vision/selftest');
+    out.innerHTML = '';
+    if (r.ok) {
+      out.appendChild(el('div', 'note',
+        `Самопроверка пройдена: ${r.found} из ${r.placed} эталонов найдено за ${r.seconds} с. ` +
+        'Распознавание исправно — если вживую не находит, дело в захвате экрана: ' +
+        'смотрите превью «Что видит приложение».'));
+    } else {
+      out.appendChild(el('div', 'error',
+        `Самопроверка НЕ пройдена: найдено ${r.found} из ${r.placed}` +
+        (r.missing && r.missing.length ? `, потеряны: ${r.missing.join(', ')}` : '') +
+        (r.reason ? `. ${r.reason}` : '') + '. Пришлите этот текст.'));
+    }
+  } catch (e) { showError(out, e); }
 });
 
 function showFrame() {
