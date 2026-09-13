@@ -77,7 +77,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-13.11"
+VERSION = "2026-09-13.12"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -305,6 +305,11 @@ class Handler(BaseHTTPRequestHandler):
         ext = os.path.splitext(path)[1]
         with open(path, "rb") as f:
             body = f.read()
+        if ext == ".html":
+            # версия в адресе скрипта и стилей: даже если браузер проигнорирует
+            # заголовки кэширования, новый адрес он обязан скачать заново
+            body = (body.replace(b'/static/app.js', f'/static/app.js?v={VERSION}'.encode())
+                        .replace(b'/static/styles.css', f'/static/styles.css?v={VERSION}'.encode()))
         self.send_response(200)
         self.send_header("Content-Type", MIME.get(ext, "application/octet-stream"))
         self.send_header("Content-Length", str(len(body)))

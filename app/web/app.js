@@ -1,5 +1,19 @@
 'use strict';
 
+// Любая необработанная ошибка скрипта — на экран, крупно. Без этого скрипт
+// падает молча, и страница выглядит как «вечная загрузка»: пустые списки
+// и никакого объяснения. Именно так это и выглядело у пользователя.
+window.addEventListener('error', (ev) => {
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999;' +
+    'background:#5a1f1a;color:#ffd9d2;padding:10px 16px;font:13px/1.4 monospace;' +
+    'white-space:pre-wrap;border-bottom:2px solid #f0563a';
+  box.textContent = 'Ошибка скрипта: ' + (ev.message || ev.error) +
+    (ev.lineno ? '  (строка ' + ev.lineno + ')' : '') +
+    '\nОбновите страницу с очисткой кэша: Ctrl+F5. Если не помогло — пришлите этот текст.';
+  document.body.appendChild(box);
+});
+
 // ---------------------------------------------------------------- состояние
 const state = {
   heroes: [],
@@ -25,7 +39,16 @@ const ROLE_LABELS = {
 };
 const roleLabel = (r) => ROLE_LABELS[r] || r;
 
-const $ = (sel) => document.querySelector(sel);
+// Если элемента нет — это рассинхрон страницы и скрипта (обычно старый
+// index.html из кэша браузера). Говорим об этом прямо, а не падаем на null.
+const $ = (sel) => {
+  const node = document.querySelector(sel);
+  if (!node) {
+    throw new Error('на странице нет элемента ' + sel +
+      ' — страница и скрипт разных версий, обновите с очисткой кэша (Ctrl+F5)');
+  }
+  return node;
+};
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -70,6 +93,8 @@ function showError(container, err) {
 }
 
 const sign = (v) => (v > 0 ? '+' : '') + v.toFixed(2);
+// «—» для отсутствующего значения; ноль — настоящее значение, его не трогаем
+const orDash = (v) => (v === null || v === undefined ? '—' : v);
 const cls = (v) => (v > 0 ? 'pos' : v < 0 ? 'neg' : 'dim');
 
 // ---------------------------------------------------------------- вкладки
@@ -262,7 +287,7 @@ async function refreshRecommendations() {
         ally: state.draft.ally,
         banned: state.draft.banned,
         bracket: $('#bracket').value,
-        role: $('#role').value,
+        position: $('#position').value,
         limit: Number($('#limit').value),
       }),
     });
@@ -349,7 +374,7 @@ function renderRecommendations(out, data) {
     'Балл в процентных пунктах: сколько винрейта герой добирает против этого драфта. ' +
     'Матчапы — вклад контрпика, База — насколько герой силён в выбранном ранге сам по себе. ' +
     'Полупрозрачные пары — менее 15 игр в выборке, доверять им не стоит. ' +
-    'Сглаживание K = ' + (data.k_shrink ?? '—') +
+    'Сглаживание K = ' + orDash(data.k_shrink) +
     ' подобрано по разбросу самих данных: чем больше K, тем сильнее в них шум.';
   out.appendChild(legend);
 }
@@ -529,7 +554,7 @@ function applyVision(enemy, ally) {
 }
 
 // ---------------------------------------------------------------- мета
-['#meta-bracket', '#meta-role'].forEach((sel) =>
+['#meta-bracket', '#meta-position'].forEach((sel) =>
   $(sel).addEventListener('change', loadMeta));
 
 let metaLoaded = false;
@@ -542,7 +567,7 @@ async function loadMeta(force) {
   try {
     const q = new URLSearchParams({
       bracket: $('#meta-bracket').value,
-      role: $('#meta-role').value,
+      position: $('#meta-position').value,
     });
     const data = await api('/api/meta?' + q);
     out.className = 'scroll';
@@ -556,7 +581,7 @@ async function loadMeta(force) {
   }
 }
 
-const metaKey = () => $('#meta-bracket').value + '|' + $('#meta-role').value;
+const metaKey = () => $('#meta-bracket').value + '|' + $('#meta-position').value;
 
 function renderMeta(out, rows) {
   out.innerHTML = '';
@@ -705,8 +730,8 @@ function renderProMatch(out, m) {
         tr.appendChild(td);
         tr.appendChild(el('td', 'dim', p.player || '—'));
         tr.appendChild(el('td', 'num', (p.kda || []).join(' / ')));
-        tr.appendChild(el('td', 'num dim', String(p.gpm ?? '—')));
-        tr.appendChild(el('td', 'num dim', String(p.xpm ?? '—')));
+        tr.appendChild(el('td', 'num dim', String(orDash(p.gpm))));
+        tr.appendChild(el('td', 'num dim', String(orDash(p.xpm))));
         tr.appendChild(el('td', 'num dim',
           p.net_worth ? p.net_worth.toLocaleString('ru-RU') : '—'));
         tb.appendChild(tr);
