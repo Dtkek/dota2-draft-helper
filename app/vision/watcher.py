@@ -40,6 +40,7 @@ class ScreenWatcher:
             "mode": "ожидание",
             "frame_brightness": None,
             "frame_hint": None,
+            "frame_width": None,
         }
 
     # --- состояние --------------------------------------------------------
@@ -72,6 +73,9 @@ class ScreenWatcher:
                 self._last_jpeg = buf.tobytes()
             self._state["frame_brightness"] = round(brightness, 1)
             self._state["frame_hint"] = hint
+            # ширина кадра нужна интерфейсу, чтобы делить стороны по центру
+            # экрана, а не по середине между найденными портретами
+            self._state["frame_width"] = w
         return frame
 
     def _set(self, **kw):
@@ -181,6 +185,7 @@ class ScreenWatcher:
                 self._last_jpeg = buf.tobytes()
             self._state["frame_brightness"] = round(float(frame.mean()), 1)
             self._state["frame_hint"] = None
+            self._state["frame_width"] = w
         hits, width = self.recognizer.scan(frame)
         self._apply(hits, width, mode=f"проверка на файле {w}×{h}")
         self._set(last_error=None)
@@ -214,13 +219,20 @@ class ScreenWatcher:
             scans=self._state.get("scans", 0) + 1,
         )
 
+    # как часто повторять полный поиск, даже если слежение идёт гладко.
+    # Без этого герои, выбранные после калибровки, не находились никогда:
+    # слежение смотрит только в уже известные прямоугольники.
+    RESCAN_EVERY = 6.0
+
     def _loop(self):
         boxes = []
         misses = 0
+        last_full = 0.0
         while not self._stop.is_set():
             try:
                 frame = self._grab()
-                if boxes:
+                due = (time.time() - last_full) >= self.RESCAN_EVERY
+                if boxes and not due:
                     found = self.recognizer.classify_boxes(frame, boxes)
                     # если уверенно распознали меньше половины — картинка уехала
                     if len(found) < max(1, len(boxes) // 2):
@@ -235,6 +247,7 @@ class ScreenWatcher:
                     hits, width = self.recognizer.scan(frame)
                     self._apply(hits, width, mode="калибровка")
                     boxes = [h["box"] for h in hits]
+                    last_full = time.time()
                 self._set(last_error=None)
             except Exception as e:  # noqa: BLE001 — поток не должен умирать
                 self._set(last_error=str(e))

@@ -413,7 +413,7 @@ function renderRecommendations(out, data) {
 }
 
 // ---------------------------------------------------------------- чтение экрана
-const vision = { timer: null, running: false, lastKey: '' };
+const vision = { timer: null, running: false, lastKey: '', lastState: null };
 
 async function visionBoot() {
   const box = $('#vision-status');
@@ -500,6 +500,18 @@ $('#vis-scan').addEventListener('click', async () => {
   } catch (e) { showError(out, e); }
 });
 
+// Смена стороны — пересобрать драфт из последнего распознанного заново:
+// иначе союзники, уже попавшие во враги при неверной стороне, там и останутся.
+$('#vis-side').addEventListener('change', () => {
+  if (!vision.lastState) return;
+  state.draft.enemy = [];
+  state.draft.ally = [];
+  vision.lastKey = '';
+  renderSlots();
+  renderHeroGrid();
+  renderVision(vision.lastState);
+});
+
 // Проверка на файле: отделяет «не захватывает экран» от «не распознаёт».
 $('#vis-file').addEventListener('change', async (e) => {
   const file = e.target.files && e.target.files[0];
@@ -569,11 +581,14 @@ async function pollVision() {
   catch (e) { /* сеть моргнула — ждём следующего опроса */ }
 }
 
-function splitBySide(heroes) {
+// Стороны делятся по центру экрана. Делить по середине между найденными
+// портретами нельзя: пока враги не выбрали героев, найдена одна команда,
+// и такой делитель режет её пополам.
+function splitBySide(heroes, frameWidth) {
   const side = $('#vis-side').value;
-  if (side === 'none' || heroes.length < 2) return { enemy: heroes, ally: [] };
-  const xs = heroes.map((h) => h.box[0] + h.box[2] / 2);
-  const mid = (Math.min(...xs) + Math.max(...xs)) / 2;
+  if (side === 'none') return { enemy: heroes, ally: [] };
+  const mid = frameWidth ? frameWidth / 2 : null;
+  if (!mid) return { enemy: heroes, ally: [] };
   const left = heroes.filter((h) => h.box[0] + h.box[2] / 2 < mid);
   const right = heroes.filter((h) => h.box[0] + h.box[2] / 2 >= mid);
   return side === 'left' ? { ally: left, enemy: right } : { ally: right, enemy: left };
@@ -605,7 +620,7 @@ function renderVision(vs) {
     return;
   }
 
-  const { enemy, ally } = splitBySide(heroes);
+  const { enemy, ally } = splitBySide(heroes, vs.frame_width);
   const row = el('div', 'draft-row');
   heroes.forEach((h) => {
     const chip = el('div', 'chip');
@@ -623,6 +638,7 @@ function renderVision(vs) {
   out.appendChild(row);
 
   // подставляем распознанное в драфт, не трогая то, что выбрано руками
+  vision.lastState = vs;
   const key = heroes.map((h) => h.hero_id).sort().join(',') + '|' + $('#vis-side').value;
   if (key !== vision.lastKey) {
     vision.lastKey = key;

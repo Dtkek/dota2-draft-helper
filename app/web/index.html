@@ -77,11 +77,11 @@
                   <option value="4">4 с</option>
                 </select>
               </div>
-              <div><label>Моя сторона</label>
+              <div><label>Моя команда в верхней полоске</label>
                 <select id="vis-side">
-                  <option value="none">не делить — всё во враги</option>
-                  <option value="left">слева</option>
+                  <option value="left" selected>слева</option>
                   <option value="right">справа</option>
+                  <option value="none">не делить — всё во враги</option>
                 </select>
               </div>
               <div><label>Задержка</label>
@@ -105,6 +105,8 @@
               Задержка нужна, чтобы после нажатия успеть переключиться в игру:
               снимается то, что на экране в момент снимка. Dota должна быть в режиме
               «Оконный без рамки» — эксклюзивный полноэкранный захват не видит.
+              «Моя команда» — с какой стороны верхней полоски ваша пятёрка; при смене
+              стороны списки врагов и своих пересобираются заново.
             </div>
             <div id="vision-out" class="empty-hint">Слежение выключено.</div>
             <div id="vision-frame-box" hidden style="margin-top:10px">
