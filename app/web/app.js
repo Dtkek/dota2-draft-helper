@@ -442,12 +442,27 @@ $('#vis-stop').addEventListener('click', async () => {
 });
 
 $('#vis-scan').addEventListener('click', async () => {
-  $('#vision-out').innerHTML = '<div class="loading">Ищу героев на экране…</div>';
+  const out = $('#vision-out');
+  const delay = Number($('#vis-delay').value);
   try {
     await visionConfig();
+    // обратный отсчёт: чтобы человек успел переключиться в игру,
+    // иначе в кадр попадает браузер с этой самой кнопкой
+    for (let left = delay; left > 0; left--) {
+      out.innerHTML = `<div class="loading">Переключитесь в игру. Снимок через ${left} с…</div>`;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    out.innerHTML = '<div class="loading">Ищу героев на экране…</div>';
     renderVision(await api('/api/vision/scan', { method: 'POST' }));
-  } catch (e) { showError($('#vision-out'), e); }
+  } catch (e) { showError(out, e); }
 });
+
+function showFrame() {
+  const box = $('#vision-frame-box');
+  const img = $('#vis-frame');
+  box.hidden = false;
+  img.src = '/api/vision/frame.jpg?t=' + Date.now();
+}
 
 $('#vis-icons').addEventListener('click', async (e) => {
   const btn = e.target;
@@ -490,10 +505,14 @@ function renderVision(vs) {
   const head = el('div', 'dim');
   head.textContent = `Режим: ${vs.mode}` +
     (vs.template_width ? ` · размер портрета ${vs.template_width} px` : '') +
-    ` · распознано: ${(vs.heroes || []).length}`;
+    ` · распознано: ${(vs.heroes || []).length}` +
+    (vs.frame_brightness !== null && vs.frame_brightness !== undefined
+      ? ` · яркость кадра ${vs.frame_brightness}` : '');
   out.appendChild(head);
 
   if (vs.last_error) out.appendChild(el('div', 'error', vs.last_error));
+  if (vs.frame_hint) out.appendChild(el('div', 'error', vs.frame_hint));
+  if (vs.scans) showFrame();
 
   const heroes = vs.heroes || [];
   if (!heroes.length) {

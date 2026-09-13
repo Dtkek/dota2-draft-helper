@@ -77,7 +77,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-13.13"
+VERSION = "2026-09-13.14"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -381,6 +381,21 @@ class Handler(BaseHTTPRequestHandler):
                 if not vision.AVAILABLE:
                     return self._json({"error": vision.requirements_hint()}, 400)
                 return self._json(get_watcher().state())
+            if url.path == "/api/vision/frame.jpg":
+                # последний захваченный кадр: главный инструмент диагностики,
+                # когда «не распознаёт» — видно, что реально попало в кадр
+                if not vision.AVAILABLE:
+                    return self._json({"error": vision.requirements_hint()}, 400)
+                data = get_watcher().last_frame_jpeg()
+                if not data:
+                    return self._json({"error": "кадров ещё не было"}, 404)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(data)
+                return None
 
             return self._json({"error": "неизвестный маршрут"}, 404)
         except Exception as e:  # noqa: BLE001 — сервер не должен падать от сбоя API

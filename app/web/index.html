@@ -79,14 +79,31 @@
                   <option value="right">справа</option>
                 </select>
               </div>
+              <div><label>Задержка</label>
+                <select id="vis-delay">
+                  <option value="0">сразу</option>
+                  <option value="5" selected>5 с</option>
+                  <option value="10">10 с</option>
+                </select>
+              </div>
             </div>
             <div class="mode" style="margin-top:10px">
               <button id="vis-start">Включить слежение</button>
               <button id="vis-stop">Остановить</button>
-              <button id="vis-scan">Сканировать сейчас</button>
+              <button id="vis-scan">Сканировать</button>
               <button id="vis-icons">Скачать портреты</button>
             </div>
+            <div class="dim" style="margin-bottom:8px">
+              Задержка нужна, чтобы после нажатия успеть переключиться в игру:
+              снимается то, что на экране в момент снимка. Dota должна быть в режиме
+              «Оконный без рамки» — эксклюзивный полноэкранный захват не видит.
+            </div>
             <div id="vision-out" class="empty-hint">Слежение выключено.</div>
+            <div id="vision-frame-box" hidden style="margin-top:10px">
+              <div class="dim">Что видит приложение (последний кадр):</div>
+              <img id="vis-frame" alt="последний кадр"
+                   style="max-width:100%;border:1px solid var(--line);border-radius:6px;margin-top:4px">
+            </div>
           </div>
         </div>
 

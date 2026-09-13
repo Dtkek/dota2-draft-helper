@@ -26,6 +26,9 @@ class ScreenWatcher:
         self._thread = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
+        # последний захваченный кадр в JPEG — чтобы в интерфейсе было видно,
+        # что именно попало в объектив: игра, браузер или чёрный экран
+        self._last_jpeg = None
         self._state = {
             "running": False,
             "heroes": [],
@@ -35,12 +38,41 @@ class ScreenWatcher:
             "last_error": None,
             "scans": 0,
             "mode": "ожидание",
+            "frame_brightness": None,
+            "frame_hint": None,
         }
 
     # --- состояние --------------------------------------------------------
     def state(self):
         with self._lock:
             return dict(self._state)
+
+    def last_frame_jpeg(self):
+        with self._lock:
+            return self._last_jpeg
+
+    def _grab(self):
+        """Захват кадра + сохранение превью и оценка, что в нём вообще есть."""
+        import cv2
+        frame = capture.grab(self.monitor, self.region)
+        h, w = frame.shape[:2]
+        k = min(1.0, 640 / w)
+        small = cv2.resize(frame, (int(w * k), int(h * k)),
+                           interpolation=cv2.INTER_AREA) if k < 1 else frame
+        ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 70])
+
+        brightness = float(frame.mean())
+        hint = None
+        if brightness < 6:
+            hint = ("кадр почти чёрный. Обычно это Dota в режиме «Полноэкранный»: "
+                    "захват экрана его не видит. Переключите игру в "
+                    "«Оконный без рамки» (настройки → видео)")
+        with self._lock:
+            if ok:
+                self._last_jpeg = buf.tobytes()
+            self._state["frame_brightness"] = round(brightness, 1)
+            self._state["frame_hint"] = hint
+        return frame
 
     def _set(self, **kw):
         with self._lock:
@@ -128,7 +160,7 @@ class ScreenWatcher:
             self.reload_templates()
         if not self.recognizer.ready and not self._download_templates():
             return self.state()
-        frame = capture.grab(self.monitor, self.region)
+        frame = self._grab()
         hits, width = self.recognizer.scan(frame)
         self._apply(hits, width, mode="разовый поиск")
         return self.state()
@@ -155,7 +187,7 @@ class ScreenWatcher:
         misses = 0
         while not self._stop.is_set():
             try:
-                frame = capture.grab(self.monitor, self.region)
+                frame = self._grab()
                 if boxes:
                     found = self.recognizer.classify_boxes(frame, boxes)
                     # если уверенно распознали меньше половины — картинка уехала
