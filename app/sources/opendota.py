@@ -10,6 +10,7 @@ import gzip
 import json
 import os
 
+import net
 from net import get_json
 from sources.base import HeroSource
 
@@ -19,8 +20,30 @@ FALLBACK = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "data", "herostats_fallback.json.gz")
 
+MATCHUPS_FALLBACK = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "matchups_fallback.json.gz")
+
 _fallback_cache = None
 fallback_date = None
+_matchups_cache = None
+matchups_date = None
+
+
+def _load_matchups():
+    """Снимок матчапов, приложенный к репозиторию: {id героя: [[id, игр, побед]]}."""
+    global _matchups_cache, matchups_date
+    if _matchups_cache is not None:
+        return _matchups_cache
+    try:
+        with gzip.open(MATCHUPS_FALLBACK, "rt", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, ValueError):
+        _matchups_cache = {}
+        return _matchups_cache
+    _matchups_cache = payload.get("matchups") or {}
+    matchups_date = payload.get("снято")
+    return _matchups_cache
 
 
 def _load_fallback():
@@ -87,7 +110,27 @@ class OpenDotaSource(HeroSource):
             return snapshot
 
     def matchups(self, hero_id):
-        return get_json(f"{API}/heroes/{int(hero_id)}/matchups", ttl=TTL_MATCHUPS)
+        """Матчапы героя. Снимок в приоритете, сеть — фоном.
+
+        На медленном канале запрос к OpenDota стоит десятки секунд, а на
+        драфт из пяти врагов их нужно пять. Поэтому порядок такой:
+        свежий кэш → снимок из репозитория (мгновенно, обновление уходит
+        в фон) → и только если снимка нет, ждём сеть.
+        """
+        hero_id = int(hero_id)
+        url = f"{API}/heroes/{hero_id}/matchups"
+
+        fresh = net.cached(url, TTL_MATCHUPS)
+        if fresh is not None:
+            return fresh
+
+        snapshot = _load_matchups().get(str(hero_id))
+        if snapshot:
+            net.refresh_in_background(url, TTL_MATCHUPS)
+            return [{"hero_id": a, "games_played": b, "wins": c}
+                    for a, b, c in snapshot]
+
+        return get_json(url, ttl=TTL_MATCHUPS)
 
     def pro_matches(self):
         return get_json(f"{API}/proMatches", ttl=TTL_PRO_LIST)

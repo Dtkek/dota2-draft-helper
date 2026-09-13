@@ -11,6 +11,7 @@ import json
 import os
 import ssl
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -86,7 +87,7 @@ def _fetch_curl(url, timeout):
     return json.loads(out.stdout)
 
 
-def get_json(url, ttl=3600, timeout=20, stale_ok=True):
+def get_json(url, ttl=3600, timeout=45, stale_ok=True):
     """Забирает JSON по url. ttl — сколько секунд кэш считается свежим.
 
     Если сеть недоступна, а в кэше есть просроченная копия, возвращается она
@@ -113,6 +114,28 @@ def get_json(url, ttl=3600, timeout=20, stale_ok=True):
         if stale is not None:
             return stale
     raise RuntimeError(f"не удалось получить {url}: {error}")
+
+
+def cached(url, ttl=3600):
+    """Отдаёт данные из кэша, если они свежие. В сеть не ходит.
+
+    Нужно, чтобы решать, идти ли в сеть вообще: на медленном канале
+    поход за данными стоит десятки секунд, и лучше сперва посмотреть,
+    нет ли готового ответа под рукой.
+    """
+    return _read_cache(url, ttl)
+
+
+def refresh_in_background(url, ttl=3600):
+    """Обновляет кэш по-тихому, не задерживая ответ пользователю."""
+    def worker():
+        try:
+            get_json(url, ttl=0)
+        except Exception:  # noqa: BLE001 — фоновое обновление не критично
+            pass
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    return t
 
 
 def download(url, dest, timeout=60):
