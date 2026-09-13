@@ -40,6 +40,18 @@ OpenDota отдаёт матчапы по публичным матчам: ок�
 W_MATCHUP = 1.0
 W_BASE = 0.6
 
+# Турнирная составляющая: насколько герой востребован и успешен у про.
+# Вес выше, чем у остальных: по просьбе владельца турнирная мета имеет
+# приоритет. Из интерфейса переключается: 0 - не учитывать, 0.6 - умеренно.
+W_TOUR = 1.5
+
+# при таком числе турнирных пиков винрейт учитывается наполовину
+TOUR_WR_K = 30
+# масштаб спорности (пики+баны / матчей), чтобы единицы совпали с матчапами
+TOUR_CONTEST_SCALE = 0.10
+# масштаб турнирного винрейта
+TOUR_WR_SCALE = 0.5
+
 # границы — только страховка от вырожденных данных, не рабочая настройка
 K_MIN, K_MAX = 20, 2000
 
@@ -136,6 +148,34 @@ def shrink(tables, k):
     return out
 
 
+def tournament_strength(rows, total_matches):
+    """Турнирная сила героя: {hero_id: доля} в тех же единицах, что матчапы.
+
+    Складывается из двух вещей:
+    1. спорность (пики + баны) / матчей, минус средняя по героям — насколько
+       чаще среднего про-команды тянутся к этому герою или боятся его;
+    2. турнирный винрейт минус 50%, сжатый по числу пиков: у героя с пятью
+       пиками винрейт ничего не значит, у героя с двумя сотнями — значит.
+    """
+    if not rows or not total_matches:
+        return {}
+    contest = {}
+    for r in rows:
+        contest[int(r["hero_id"])] = (int(r["picks"]) + int(r["bans"])) / total_matches
+    mean_contest = sum(contest.values()) / max(len(contest), 1)
+
+    out = {}
+    for r in rows:
+        hid = int(r["hero_id"])
+        picks, wins = int(r["picks"]), int(r["wins"])
+        c = TOUR_CONTEST_SCALE * (contest[hid] - mean_contest)
+        w = 0.0
+        if picks:
+            w = TOUR_WR_SCALE * (wins / picks - 0.5) * picks / (picks + TOUR_WR_K)
+        out[hid] = c + w
+    return out
+
+
 def matchup_tables(source, enemy_ids):
     """Сглаженные таблицы матчапов + использованное значение K."""
     raw = {e: raw_matchup_table(source, e) for e in enemy_ids}
@@ -144,7 +184,7 @@ def matchup_tables(source, enemy_ids):
 
 
 def recommend(source, enemy_ids, ally_ids=(), banned_ids=(), bracket="all",
-              role=None, limit=15, allowed_ids=None):
+              role=None, limit=15, allowed_ids=None, tour=None, tour_weight=W_TOUR):
     """Топ героев против вражеского драфта.
 
     enemy_ids — герои противника, ally_ids — уже взятые свои,
@@ -184,7 +224,13 @@ def recommend(source, enemy_ids, ally_ids=(), banned_ids=(), bracket="all",
 
         hero_base = base.get(hero_id)
         base_delta = (hero_base - mean_base) if hero_base is not None else 0.0
-        score = W_MATCHUP * matchup_avg + W_BASE * base_delta
+
+        # турнирная составляющая: словарь приходит снаружи, потому что
+        # его источник и период выбирает сервер, а не логика подбора
+        tour_val = (tour or {}).get(hero_id, 0.0) if tour_weight else 0.0
+
+        score = (W_MATCHUP * matchup_avg + W_BASE * base_delta
+                 + tour_weight * tour_val)
 
         results.append({
             "hero_id": hero_id,
@@ -192,10 +238,11 @@ def recommend(source, enemy_ids, ally_ids=(), banned_ids=(), bracket="all",
             "img": stat.get("img"),
             "roles": stat.get("roles") or [],
             "primary_attr": stat.get("primary_attr"),
-            # вклады уже с весами, чтобы matchup_pp + base_pp == score_pp
+            # вклады уже с весами, чтобы matchup_pp + base_pp + tour_pp == score_pp
             "score_pp": round(score * 100, 2),
             "matchup_pp": round(W_MATCHUP * matchup_avg * 100, 2),
             "base_pp": round(W_BASE * base_delta * 100, 2),
+            "tour_pp": round(tour_weight * tour_val * 100, 2),
             "base_winrate": round(hero_base * 100, 2) if hero_base is not None else None,
             "games_total": games_total,
             "per_enemy": per_enemy,

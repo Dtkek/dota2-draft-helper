@@ -90,7 +90,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-13.20"
+VERSION = "2026-09-13.22"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -248,10 +248,72 @@ def pro_matches(source, limit=40):
     return out
 
 
+# расходники в ленте сборки только шумят; стартовый закуп показываем целиком
+CONSUMABLE_QUALS = {"consumable", "consumable;laning"}
+
+
+def item_builds(player, items_by_name, items_by_id):
+    """Предметы игрока: стартовый закуп, сборка по времени, итоговый инвентарь.
+
+    purchase_log — покупки с временем в секундах от рога; отрицательное время
+    значит «до начала игры», это и есть стартовый закуп. В сборке расходники
+    и компоненты не показываем: интересны собранные предметы и порядок.
+    """
+    def info(name):
+        it = items_by_name.get(name)
+        if not it:
+            return {"key": name, "dname": name, "img": None, "cost": 0}
+        return {"key": name, "dname": it.get("dname") or name,
+                "img": CDN + it["img"] if it.get("img") else None,
+                "cost": it.get("cost") or 0}
+
+    log = sorted((e for e in (player.get("purchase_log") or []) if e.get("key")),
+                 key=lambda e: e.get("time", 0))
+    start = [info(e["key"]) for e in log if (e.get("time") or 0) <= 0]
+
+    build = []
+    for e in log:
+        t = e.get("time") or 0
+        if t <= 0:
+            continue
+        it = items_by_name.get(e["key"]) or {}
+        if it.get("qual") in CONSUMABLE_QUALS or it.get("qual") == "component":
+            continue
+        if (it.get("cost") or 0) < 500:
+            continue
+        entry = info(e["key"])
+        entry["minute"] = int(t // 60)
+        build.append(entry)
+
+    final = []
+    for slot in ("item_0", "item_1", "item_2", "item_3", "item_4", "item_5"):
+        iid = player.get(slot)
+        if iid:
+            name = items_by_id.get(int(iid))
+            if name:
+                final.append(info(name))
+    neutral = None
+    if player.get("item_neutral"):
+        name = items_by_id.get(int(player["item_neutral"]))
+        if name:
+            neutral = info(name)
+    return {"start": start, "build": build, "final": final, "neutral": neutral,
+            "has_log": bool(log)}
+
+
 def pro_match_detail(source, match_id):
     """Драфт матча + кто выигрывал по матчапам ещё до начала игры."""
-    m = source.match(match_id)
+    # лёгкий путь через базу; полный JSON матча - только если база не отдала
+    slim_error = None
+    try:
+        m = source.match_slim(match_id)
+    except Exception as e:  # noqa: BLE001
+        slim_error = str(e)[:160]
+        m = source.match(match_id)
     stats_by_id = {h["id"]: h for h in source.hero_stats()}
+
+    items_by_name = source.items() or {}
+    items_by_id = {it["id"]: name for name, it in items_by_name.items() if it.get("id")}
 
     def hero_info(hid):
         s = stats_by_id.get(hid, {})
@@ -267,6 +329,7 @@ def pro_match_detail(source, match_id):
             "gpm": p.get("gold_per_min"),
             "xpm": p.get("xp_per_min"),
             "net_worth": p.get("net_worth"),
+            "items": item_builds(p, items_by_name, items_by_id),
         })
         (radiant if p.get("isRadiant") else dire).append(entry)
 
@@ -298,6 +361,7 @@ def pro_match_detail(source, match_id):
         "draft_order": draft_order,
         "edge": edge,
         "has_draft": bool(draft_order),
+        "slim_error": slim_error,
     }
 
 
@@ -475,6 +539,21 @@ class Handler(BaseHTTPRequestHandler):
                 if not enemy:
                     return self._json({"error": "не выбран ни один герой противника"}, 400)
                 bracket, note = resolve_bracket(src, data.get("bracket") or "all")
+
+                # турнирная составляющая: вес выбирает пользователь,
+                # 0 - не учитывать. Если база турниров недоступна, подбор
+                # работает без неё и говорит об этом, а не падает.
+                tour_weight = float(data.get("tour_weight", scoring.W_TOUR))
+                tour, tour_note, tour_matches = None, None, 0
+                if tour_weight > 0:
+                    try:
+                        t_rows, tour_matches = src.tournament_stats(
+                            int(data.get("tour_months") or 3), "top")
+                        tour = scoring.tournament_strength(t_rows, tour_matches)
+                    except Exception as e:  # noqa: BLE001
+                        tour_note = f"турнирная статистика недоступна: {str(e)[:120]}"
+                        tour_weight = 0.0
+
                 rows, k_shrink = scoring.recommend(
                     src,
                     enemy_ids=enemy,
@@ -484,6 +563,8 @@ class Handler(BaseHTTPRequestHandler):
                     role=data.get("role") or None,
                     limit=int(data.get("limit") or 15),
                     allowed_ids=ids_for_position(data.get("position")),
+                    tour=tour,
+                    tour_weight=tour_weight,
                 )
                 return self._json({
                     "rows": rows,
@@ -491,6 +572,9 @@ class Handler(BaseHTTPRequestHandler):
                     "bracket_used": bracket,
                     "note": note,
                     "k_shrink": k_shrink,
+                    "tour_weight": tour_weight,
+                    "tour_matches": tour_matches,
+                    "tour_note": tour_note,
                 })
 
             if url.path.startswith("/api/vision/"):

@@ -24,10 +24,27 @@ MATCHUPS_FALLBACK = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "data", "matchups_fallback.json.gz")
 
+ITEMS_FALLBACK = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "items_fallback.json.gz")
+
 _fallback_cache = None
 fallback_date = None
 _matchups_cache = None
 matchups_date = None
+_items_cache = None
+
+
+def _load_items():
+    global _items_cache
+    if _items_cache is not None:
+        return _items_cache
+    try:
+        with gzip.open(ITEMS_FALLBACK, "rt", encoding="utf-8") as f:
+            _items_cache = json.load(f).get("items") or {}
+    except (OSError, ValueError):
+        _items_cache = {}
+    return _items_cache
 
 
 def _load_matchups():
@@ -208,7 +225,87 @@ class OpenDotaSource(HeroSource):
         return rows, total
 
     def match(self, match_id):
+        """Матч целиком с /matches/{id} — 45 КБ на проводе и больше.
+
+        На каналах, где соединение обрывается на 20-30 КБ, это никогда
+        не доходит. Основной путь теперь match_slim(); этот — запасной.
+        """
         return get_json(f"{API}/matches/{int(match_id)}", ttl=TTL_MATCH)
+
+    def match_slim(self, match_id):
+        """Только нужные поля матча через базу OpenDota, тремя запросами.
+
+        Каждый кусок — единицы килобайт, чтобы проходить через самый
+        капризный канал: шапка с драфтом, игроки со статистикой, закупы.
+        Закупы идут отдельно и последними: они самые тяжёлые, и без них
+        матч всё равно показать можно. Возвращает структуру, совместимую
+        с ответом /matches/{id} в той части, которую использует приложение.
+        """
+        mid = int(match_id)
+        hdr = _explorer(f"""
+            select m.match_id, m.radiant_win, m.duration, m.radiant_score,
+                   m.dire_score, m.picks_bans, l.name as league,
+                   rt.name as radiant_name, dt.name as dire_name
+            from matches m
+            left join leagues l on l.leagueid = m.leagueid
+            left join teams rt on rt.team_id = m.radiant_team_id
+            left join teams dt on dt.team_id = m.dire_team_id
+            where m.match_id = {mid}
+        """, ttl=TTL_MATCH).get("rows") or []
+        if not hdr:
+            raise RuntimeError(f"матч {mid} не найден в базе OpenDota")
+        h = hdr[0]
+
+        players = _explorer(f"""
+            select pm.player_slot, pm.hero_id, pm.kills, pm.deaths, pm.assists,
+                   pm.gold_per_min, pm.xp_per_min,
+                   pm.item_0, pm.item_1, pm.item_2, pm.item_3, pm.item_4,
+                   pm.item_5, pm.item_neutral, np.name as player
+            from player_matches pm
+            left join notable_players np on np.account_id = pm.account_id
+            where pm.match_id = {mid}
+            order by pm.player_slot
+        """, ttl=TTL_MATCH).get("rows") or []
+
+        logs = {}
+        try:
+            for r in _explorer(f"""
+                select pm.player_slot, pm.purchase_log
+                from player_matches pm where pm.match_id = {mid}
+            """, ttl=TTL_MATCH).get("rows") or []:
+                logs[r["player_slot"]] = r.get("purchase_log") or []
+        except Exception:  # noqa: BLE001 — без закупов матч всё равно показываем
+            pass
+
+        for p in players:
+            p["isRadiant"] = p["player_slot"] < 128
+            p["name"] = p.get("player")
+            p["purchase_log"] = logs.get(p["player_slot"], [])
+
+        return {
+            "match_id": h["match_id"],
+            "radiant_win": h["radiant_win"],
+            "duration": h["duration"],
+            "radiant_score": h["radiant_score"],
+            "dire_score": h["dire_score"],
+            "picks_bans": h.get("picks_bans") or [],
+            "league": {"name": h.get("league")},
+            "radiant_team": {"name": h.get("radiant_name")},
+            "dire_team": {"name": h.get("dire_name")},
+            "players": players,
+        }
+
+    # --- предметы ---------------------------------------------------------
+    def items(self):
+        """Справочник предметов: {внутреннее_имя: {id, dname, img, cost, qual}}.
+
+        Снимок в приоритете: полный /constants/items весит 336 КБ и меняется
+        раз в патч, гонять его по сети незачем.
+        """
+        snapshot = _load_items()
+        if snapshot:
+            return snapshot
+        return get_json(f"{API}/constants/items", ttl=TTL_HEROES)
 
     # --- вспомогательное ---------------------------------------------------
 

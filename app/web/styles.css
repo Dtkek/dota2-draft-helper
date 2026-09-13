@@ -180,6 +180,18 @@ tbody tr:hover { background: var(--panel-2); }
 .draft-row img { width: 48px; height: 27px; border-radius: 3px; }
 .draft-row .ban { opacity: .35; filter: grayscale(1); }
 
+/* --- предметы в разборе матча --- */
+.items { display: flex; flex-direction: column; gap: 4px; padding: 2px 0 6px; }
+.items-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.items-title { width: 52px; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; }
+.item { position: relative; display: inline-flex; align-items: center; }
+.item img { width: 36px; height: 26px; border-radius: 3px; border: 1px solid var(--line); display: block; }
+.item-min {
+  position: absolute; right: 1px; bottom: 1px;
+  font-size: 9px; line-height: 1; padding: 1px 3px;
+  background: rgba(0,0,0,.75); color: #fff; border-radius: 2px;
+}
+
 .note {
   background: #1a1f16;
   border: 1px solid #2f3a24;

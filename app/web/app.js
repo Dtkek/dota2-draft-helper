@@ -299,7 +299,7 @@ function renderSlots() {
     });
 }
 
-['#bracket', '#position', '#limit'].forEach((sel) =>
+['#bracket', '#position', '#limit', '#tour-weight', '#tour-period'].forEach((sel) =>
   $(sel).addEventListener('change', refreshRecommendations));
 
 let recToken = 0;
@@ -323,6 +323,8 @@ async function refreshRecommendations() {
         bracket: $('#bracket').value,
         position: $('#position').value,
         limit: Number($('#limit').value),
+        tour_weight: Number($('#tour-weight').value),
+        tour_months: Number($('#tour-period').value),
       }),
     });
     if (token !== recToken) return;
@@ -336,15 +338,18 @@ function renderRecommendations(out, data) {
   const rows = data.rows;
   out.innerHTML = '';
   if (data.note) out.appendChild(el('div', 'error', 'Внимание: ' + data.note));
+  if (data.tour_note) out.appendChild(el('div', 'error', data.tour_note));
   if (!rows.length) {
     out.appendChild(el('div', 'empty-hint', 'Ничего не подошло под фильтры.'));
     return;
   }
+  const withTour = data.tour_weight > 0;
   const max = Math.max(...rows.map((r) => Math.abs(r.score_pp)), 1);
   const table = el('table');
   table.innerHTML = `<thead><tr>
       <th>#</th><th>Герой</th><th class="num">Балл</th>
       <th class="num">Матчапы</th><th class="num">База</th>
+      ${withTour ? '<th class="num">Турниры</th>' : ''}
       <th class="num">Винрейт</th><th class="num">Выборка</th>
       <th>Против кого</th></tr></thead>`;
   const tb = el('tbody');
@@ -379,6 +384,10 @@ function renderRecommendations(out, data) {
 
     tr.appendChild(el('td', 'num ' + cls(r.matchup_pp), sign(r.matchup_pp)));
     tr.appendChild(el('td', 'num ' + cls(r.base_pp), sign(r.base_pp)));
+    if (withTour) {
+      const tp = r.tour_pp || 0;
+      tr.appendChild(el('td', 'num ' + cls(tp), sign(tp)));
+    }
     tr.appendChild(el('td', 'num', r.base_winrate === null ? '—' : r.base_winrate.toFixed(1) + '%'));
     tr.appendChild(el('td', 'num dim', String(r.games_total)));
 
@@ -405,11 +414,13 @@ function renderRecommendations(out, data) {
   const legend = el('div', 'dim');
   legend.style.marginTop = '10px';
   legend.textContent =
-    'Балл в процентных пунктах: сколько винрейта герой добирает против этого драфта. ' +
-    'Матчапы — вклад контрпика, База — насколько герой силён в выбранном ранге сам по себе. ' +
-    'Полупрозрачные пары — менее 15 игр в выборке, доверять им не стоит. ' +
-    'Сглаживание K = ' + orDash(data.k_shrink) +
-    ' подобрано по разбросу самих данных: чем больше K, тем сильнее в них шум.';
+    'Балл в процентных пунктах. Матчапы — вклад контрпика, База — сила героя в выбранном ранге. ' +
+    (withTour
+      ? `Турниры — востребованность и винрейт у про за выбранный период (${data.tour_matches} матчей), ` +
+        `вес ${data.tour_weight}: чем выше, тем сильнее турнирная мета перевешивает остальное. `
+      : '') +
+    'Полупрозрачные пары — менее 15 игр в выборке. ' +
+    'Сглаживание K = ' + orDash(data.k_shrink) + '.';
   out.appendChild(legend);
 }
 
@@ -870,7 +881,8 @@ async function loadProList() {
 
 async function loadProMatch(id) {
   const out = $('#pro-detail');
-  out.innerHTML = '<div class="loading">Загрузка матча…</div>';
+  out.innerHTML = '<div class="loading">Загружаю матч: драфт, игроки, закупы — три коротких ' +
+    'запроса к базе OpenDota…</div>';
   try {
     const m = await api('/api/pro/match?id=' + id);
     renderProMatch(out, m);
@@ -956,11 +968,59 @@ function renderProMatch(out, m) {
         tr.appendChild(el('td', 'num dim',
           p.net_worth ? p.net_worth.toLocaleString('ru-RU') : '—'));
         tb.appendChild(tr);
+
+        // строка с предметами: старт, сборка по минутам, итог
+        if (p.items) {
+          const tri = el('tr');
+          const tdi = el('td');
+          tdi.colSpan = 6;
+          tdi.appendChild(itemsBlock(p.items));
+          tri.appendChild(tdi);
+          tb.appendChild(tri);
+        }
       });
       table.appendChild(tb);
       card.appendChild(table);
       out.appendChild(card);
     });
+}
+
+function itemIcon(it, label) {
+  const wrap = el('span', 'item');
+  if (it.img) {
+    const img = el('img');
+    img.src = it.img;
+    img.alt = it.dname;
+    img.loading = 'lazy';
+    wrap.appendChild(img);
+  } else {
+    wrap.appendChild(el('span', 'dim', it.dname));
+  }
+  if (label !== undefined) wrap.appendChild(el('span', 'item-min', label));
+  wrap.title = it.dname + (it.cost ? ` — ${it.cost} зол.` : '') +
+    (label !== undefined ? ` — ${label} мин` : '');
+  return wrap;
+}
+
+function itemsBlock(items) {
+  const box = el('div', 'items');
+  const line = (title, nodes) => {
+    if (!nodes.length) return;
+    const row = el('div', 'items-row');
+    row.appendChild(el('span', 'dim items-title', title));
+    nodes.forEach((n) => row.appendChild(n));
+    box.appendChild(row);
+  };
+  if (!items.has_log && !items.final.length) {
+    box.appendChild(el('span', 'dim', 'предметы недоступны: матч не разобран'));
+    return box;
+  }
+  line('старт', items.start.map((it) => itemIcon(it)));
+  line('сборка', items.build.map((it) => itemIcon(it, it.minute)));
+  const fin = items.final.map((it) => itemIcon(it));
+  if (items.neutral) fin.push(itemIcon(items.neutral, 'нейтр.'));
+  line('итог', fin);
+  return box;
 }
 
 function heroRow(items, isBan) {
