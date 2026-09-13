@@ -66,6 +66,14 @@ TTL_STATS = 3600
 TTL_MATCHUPS = 6 * 3600
 TTL_PRO_LIST = 600
 TTL_MATCH = 7 * 24 * 3600
+TTL_TOURNAMENT = 6 * 3600
+
+
+def _explorer(sql, ttl):
+    """Запрос к базе OpenDota через /explorer с кэшем, как у остальных данных."""
+    import urllib.parse
+    url = f"{API}/explorer?sql={urllib.parse.quote(' '.join(sql.split()))}"
+    return get_json(url, ttl=ttl, timeout=120)
 
 
 class OpenDotaSource(HeroSource):
@@ -143,6 +151,61 @@ class OpenDotaSource(HeroSource):
 
     def pro_matches(self):
         return get_json(f"{API}/proMatches", ttl=TTL_PRO_LIST)
+
+    # --- турнирная статистика ------------------------------------------
+    # Поля pro_pick/pro_win в heroStats почти пустые, поэтому турнирная
+    # статистика считается напрямую по базе матчей через /explorer:
+    # picks_bans — драфт, matches — исход, leagues — уровень турнира.
+
+    TIERS = {
+        "top": ("premium", "professional"),
+        "premium": ("premium",),
+        "all": ("premium", "professional", "excluded", "amateur"),
+    }
+
+    def tournament_leagues(self, months=3):
+        """Турниры за период: id, название, уровень, число матчей."""
+        sql = f"""
+        select l.leagueid, l.name, l.tier, count(*) as matches
+        from matches m join leagues l on l.leagueid = m.leagueid
+        where m.start_time > extract(epoch from now() - interval '{int(months)} months')
+        group by l.leagueid, l.name, l.tier
+        order by matches desc
+        limit 60
+        """
+        return _explorer(sql, ttl=TTL_TOURNAMENT).get("rows") or []
+
+    def tournament_stats(self, months=3, tier="top", leagueid=None):
+        """Пики, баны и победы каждого героя в турнирных матчах.
+
+        Возвращает (строки, всего_матчей). Победа засчитывается по стороне:
+        team 0 в picks_bans — Radiant, 1 — Dire.
+        """
+        tiers = self.TIERS.get(tier, self.TIERS["top"])
+        tier_sql = ", ".join(f"'{t}'" for t in tiers)
+        league_sql = f"and m.leagueid = {int(leagueid)}" if leagueid else ""
+        sql = f"""
+        with pro as (
+          select m.match_id, m.radiant_win
+          from matches m join leagues l on l.leagueid = m.leagueid
+          where m.start_time > extract(epoch from now() - interval '{int(months)} months')
+            and l.tier in ({tier_sql}) {league_sql}
+        )
+        select * from (
+          select pb.hero_id,
+            sum(case when pb.is_pick then 1 else 0 end) as picks,
+            sum(case when not pb.is_pick then 1 else 0 end) as bans,
+            sum(case when pb.is_pick and ((pb.team = 0 and pro.radiant_win)
+                  or (pb.team = 1 and not pro.radiant_win)) then 1 else 0 end) as wins,
+            (select count(*) from pro) as total_matches
+          from picks_bans pb join pro on pro.match_id = pb.match_id
+          group by pb.hero_id
+        ) t
+        order by picks + bans desc
+        """
+        rows = _explorer(sql, ttl=TTL_TOURNAMENT).get("rows") or []
+        total = rows[0]["total_matches"] if rows else 0
+        return rows, total
 
     def match(self, match_id):
         return get_json(f"{API}/matches/{int(match_id)}", ttl=TTL_MATCH)

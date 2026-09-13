@@ -90,7 +90,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-13.19"
+VERSION = "2026-09-13.20"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -207,6 +207,29 @@ def meta_table(source, bracket, role=None, allowed_ids=None):
         r["pick_share"] = round(r["picks"] / total_picks * 100, 2) if total_picks else 0
     rows.sort(key=lambda r: (r["winrate"] is None, -(r["winrate"] or 0)))
     return rows
+
+
+def tournament_table(source, months=3, tier="top", leagueid=None):
+    """Турнирная статистика по героям с долями от числа матчей."""
+    rows, total = source.tournament_stats(months, tier, leagueid)
+    stats_by_id = {h["id"]: h for h in source.hero_stats()}
+    out = []
+    for r in rows:
+        s = stats_by_id.get(r["hero_id"], {})
+        picks, bans, wins = int(r["picks"]), int(r["bans"]), int(r["wins"])
+        out.append({
+            "id": r["hero_id"],
+            "name": s.get("localized_name"),
+            "img": CDN + s["img"] if s.get("img") else None,
+            "picks": picks,
+            "bans": bans,
+            "wins": wins,
+            "winrate": round(wins / picks * 100, 1) if picks else None,
+            "pick_rate": round(picks / total * 100, 1) if total else 0,
+            "ban_rate": round(bans / total * 100, 1) if total else 0,
+            "contest_rate": round((picks + bans) / total * 100, 1) if total else 0,
+        })
+    return out, total
 
 
 def pro_matches(source, limit=40):
@@ -380,6 +403,17 @@ class Handler(BaseHTTPRequestHandler):
                 })
             if url.path == "/api/pro/matches":
                 return self._json({"matches": pro_matches(src)})
+            if url.path == "/api/tournaments":
+                months = int((q.get("months") or ["3"])[0])
+                tier = (q.get("tier") or ["top"])[0]
+                league = (q.get("league") or [None])[0] or None
+                rows, total = tournament_table(src, months, tier, league)
+                return self._json({"rows": rows, "total_matches": total,
+                                   "months": months, "tier": tier,
+                                   "league": league})
+            if url.path == "/api/tournaments/leagues":
+                months = int((q.get("months") or ["3"])[0])
+                return self._json({"leagues": src.tournament_leagues(months)})
             if url.path == "/api/pro/match":
                 mid = (q.get("id") or [None])[0]
                 if not mid:

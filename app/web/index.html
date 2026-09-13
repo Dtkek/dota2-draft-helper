@@ -12,6 +12,7 @@
   <nav class="tabs">
     <button class="tab active" data-view="draft">Драфт</button>
     <button class="tab" data-view="meta">Мета</button>
+    <button class="tab" data-view="tournaments">Турниры</button>
     <button class="tab" data-view="pro">Про-матчи</button>
   </nav>
   <div class="spacer"></div>
@@ -152,6 +153,40 @@
         <div><label>Позиция</label><select id="meta-position"></select></div>
       </div>
       <div id="meta-out" class="loading">Загрузка…</div>
+    </div>
+  </section>
+
+  <!-- ===================== ТУРНИРЫ ===================== -->
+  <section class="view" id="view-tournaments">
+    <div class="card">
+      <h2>Турнирная статистика героев</h2>
+      <div class="controls">
+        <div><label>Период</label>
+          <select id="tour-months">
+            <option value="1">1 месяц</option>
+            <option value="3" selected>3 месяца</option>
+            <option value="6">6 месяцев</option>
+          </select>
+        </div>
+        <div><label>Уровень</label>
+          <select id="tour-tier">
+            <option value="top" selected>Premium + Professional</option>
+            <option value="premium">Только Premium</option>
+            <option value="all">Все турниры</option>
+          </select>
+        </div>
+        <div><label>Турнир</label><select id="tour-league"><option value="">Все</option></select></div>
+        <div><label>Сортировка</label>
+          <select id="tour-sort">
+            <option value="contest_rate" selected>по спорности (пики + баны)</option>
+            <option value="picks">по пикам</option>
+            <option value="bans">по банам</option>
+            <option value="winrate">по винрейту</option>
+          </select>
+        </div>
+      </div>
+      <div id="tour-summary" class="dim" style="margin-bottom:8px"></div>
+      <div id="tour-out" class="loading">Загрузка…</div>
     </div>
   </section>
 

@@ -43,3 +43,11 @@ class HeroSource:
     def available_brackets(self):
         """Ранги, по которым у источника реально есть данные."""
         raise NotImplementedError
+
+    def tournament_leagues(self, months=3):
+        """Турниры за период: [{leagueid, name, tier, matches}]."""
+        raise NotImplementedError
+
+    def tournament_stats(self, months=3, tier="top", leagueid=None):
+        """Пики/баны/победы героев в турнирах: ([{hero_id, picks, bans, wins}], всего матчей)."""
+        raise NotImplementedError

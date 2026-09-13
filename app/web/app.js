@@ -128,6 +128,7 @@ document.querySelectorAll('.tabs .tab[data-view]').forEach((tab) => {
     tab.classList.add('active');
     $('#view-' + tab.dataset.view).classList.add('active');
     if (tab.dataset.view === 'meta') loadMeta();
+    if (tab.dataset.view === 'tournaments') loadTournaments();
     if (tab.dataset.view === 'pro') loadProList();
   });
 });
@@ -730,6 +731,107 @@ function renderMeta(out, rows) {
     tr.appendChild(el('td', 'num dim', String(r.pro_ban)));
     tr.appendChild(el('td', 'num dim',
       r.pro_winrate === null ? '—' : r.pro_winrate.toFixed(1) + '%'));
+    tb.appendChild(tr);
+  });
+  table.appendChild(tb);
+  out.appendChild(table);
+}
+
+// ---------------------------------------------------------------- турниры
+const tour = { rows: [], total: 0, leaguesFor: null };
+
+['#tour-months', '#tour-tier', '#tour-league'].forEach((sel) =>
+  $(sel).addEventListener('change', () => loadTournaments(true)));
+$('#tour-sort').addEventListener('change', () => renderTournaments());
+
+async function loadTournamentLeagues() {
+  const months = $('#tour-months').value;
+  if (tour.leaguesFor === months) return;
+  const data = await api('/api/tournaments/leagues?months=' + months);
+  tour.leaguesFor = months;
+  const sel = $('#tour-league');
+  const keep = sel.value;
+  sel.innerHTML = '';
+  const all = document.createElement('option');
+  all.value = ''; all.textContent = 'Все';
+  sel.appendChild(all);
+  data.leagues.forEach((l) => {
+    const o = document.createElement('option');
+    o.value = l.leagueid;
+    o.textContent = `${l.name} — ${l.matches} матчей (${l.tier})`;
+    sel.appendChild(o);
+  });
+  if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+}
+
+let tourLoaded = false;
+async function loadTournaments(force) {
+  if (tourLoaded && !force) return;
+  const out = $('#tour-out');
+  out.className = 'loading';
+  out.textContent = 'Считаю по базе турнирных матчей, это может занять полминуты…';
+  try {
+    await loadTournamentLeagues();
+    const q = new URLSearchParams({
+      months: $('#tour-months').value,
+      tier: $('#tour-tier').value,
+      league: $('#tour-league').value,
+    });
+    const data = await api('/api/tournaments?' + q);
+    tour.rows = data.rows;
+    tour.total = data.total_matches;
+    tourLoaded = true;
+    out.className = 'scroll';
+    renderTournaments();
+  } catch (e) {
+    out.className = '';
+    showError(out, e);
+  }
+}
+
+function renderTournaments() {
+  const out = $('#tour-out');
+  const key = $('#tour-sort').value;
+  const rows = tour.rows.slice().sort((a, b) => {
+    const av = a[key] === null ? -1 : a[key];
+    const bv = b[key] === null ? -1 : b[key];
+    return bv - av;
+  });
+  $('#tour-summary').textContent =
+    `Матчей в выборке: ${tour.total}. Пик-рейт и бан-рейт — доля матчей, в которых ` +
+    'героя взяли или забанили; спорность — их сумма. Винрейт считается только по пикам.';
+  out.innerHTML = '';
+  if (!rows.length) {
+    out.appendChild(el('div', 'empty-hint', 'За этот период матчей нет.'));
+    return;
+  }
+  const table = el('table');
+  table.innerHTML = `<thead><tr>
+    <th>#</th><th>Герой</th><th class="num">Спорность</th><th class="num">Пики</th>
+    <th class="num">Пик-рейт</th><th class="num">Баны</th><th class="num">Бан-рейт</th>
+    <th class="num">Винрейт</th></tr></thead>`;
+  const tb = el('tbody');
+  rows.forEach((r, i) => {
+    const tr = el('tr');
+    tr.appendChild(el('td', 'dim', String(i + 1)));
+    const td = el('td');
+    const cell = el('div', 'hero-cell');
+    if (r.img) {
+      const img = el('img'); img.src = r.img; img.alt = r.name; img.loading = 'lazy';
+      cell.appendChild(img);
+    }
+    cell.appendChild(el('span', '', r.name || String(r.id)));
+    td.appendChild(cell);
+    tr.appendChild(td);
+    tr.appendChild(el('td', 'num', r.contest_rate.toFixed(1) + '%'));
+    tr.appendChild(el('td', 'num dim', String(r.picks)));
+    tr.appendChild(el('td', 'num dim', r.pick_rate.toFixed(1) + '%'));
+    tr.appendChild(el('td', 'num dim', String(r.bans)));
+    tr.appendChild(el('td', 'num dim', r.ban_rate.toFixed(1) + '%'));
+    const wr = el('td', 'num', r.winrate === null ? '—' : r.winrate.toFixed(1) + '%');
+    if (r.winrate !== null && r.picks < 10) wr.classList.add('dim');
+    wr.title = r.picks < 10 ? 'меньше 10 пиков — винрейт ненадёжен' : '';
+    tr.appendChild(wr);
     tb.appendChild(tr);
   });
   table.appendChild(tb);
