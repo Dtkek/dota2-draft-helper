@@ -18,6 +18,7 @@ from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import gsi  # noqa: E402
 import net  # noqa: E402
 import scoring  # noqa: E402
 import vision  # noqa: E402
@@ -90,7 +91,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-13.22"
+VERSION = "2026-09-13.23"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -301,6 +302,78 @@ def item_builds(player, items_by_name, items_by_id):
             "has_log": bool(log)}
 
 
+def hero_build(source, hero_id, months=3):
+    """Рекомендуемая сборка героя по турнирным матчам.
+
+    Стартовый закуп - предметы, купленные до рога хотя бы в 40% игр,
+    с числом штук. Порядок сборки - предметы дороже 500 золота, купленные
+    хотя бы в четверти игр, по медианной минуте покупки. Ситуативные -
+    дорогие предметы из 10-25% игр. Итог - что чаще всего в инвентаре.
+    """
+    purchases, final = source.hero_builds(hero_id, months)
+    items = source.items() or {}
+    by_id = {it["id"]: name for name, it in items.items() if it.get("id")}
+
+    def info(name):
+        it = items.get(name) or {}
+        return {"key": name, "dname": it.get("dname") or name,
+                "img": CDN + it["img"] if it.get("img") else None,
+                "cost": it.get("cost") or 0, "qual": it.get("qual")}
+
+    if not purchases:
+        return {"hero_id": hero_id, "games": 0}
+    total = int(purchases[0]["total_games"]) or 1
+    wins = int(purchases[0]["wins"] or 0)
+
+    start = []
+    for r in purchases:
+        sg = int(r["start_games"] or 0)
+        if sg / total >= 0.4:
+            e = info(r["key"])
+            e["share"] = round(sg / total * 100)
+            e["count"] = round(float(r["start_per_game"] or 1))
+            start.append(e)
+    start.sort(key=lambda e: -e["share"])
+
+    order, situational = [], []
+    for r in purchases:
+        if not r["median_time"]:
+            continue
+        e = info(r["key"])
+        if e["qual"] in CONSUMABLE_QUALS or e["qual"] == "component" or e["cost"] < 500:
+            continue
+        share = int(r["games"]) / total
+        e["share"] = round(share * 100)
+        e["minute"] = int(float(r["median_time"]) // 60)
+        if share >= 0.25:
+            order.append(e)
+        elif share >= 0.10 and e["cost"] >= 1500:
+            situational.append(e)
+    order.sort(key=lambda e: e["minute"])
+    situational.sort(key=lambda e: -e["share"])
+
+    final_items = []
+    for r in final:
+        name = by_id.get(int(r["item_id"]))
+        if not name:
+            continue
+        e = info(name)
+        e["share"] = round(int(r["games"]) / int(r["total"]) * 100)
+        final_items.append(e)
+
+    return {
+        "hero_id": hero_id,
+        "games": total,
+        "wins": wins,
+        "winrate": round(wins / total * 100, 1),
+        "months": months,
+        "start": start,
+        "order": order,
+        "situational": situational[:8],
+        "final": final_items[:10],
+    }
+
+
 def pro_match_detail(source, match_id):
     """Драфт матча + кто выигрывал по матчапам ещё до начала игры."""
     # лёгкий путь через базу; полный JSON матча - только если база не отдала
@@ -475,6 +548,39 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"rows": rows, "total_matches": total,
                                    "months": months, "tier": tier,
                                    "league": league})
+            if url.path == "/api/gsi/state":
+                s = gsi.state()
+                # имя героя из игры -> id из справочника
+                if s.get("hero_name") and not s.get("hero_id"):
+                    for h in src.hero_stats():
+                        if h.get("name") == s["hero_name"]:
+                            s["hero_id"] = h["id"]
+                            break
+                if s.get("hero_id"):
+                    for h in src.hero_stats():
+                        if h["id"] == s["hero_id"]:
+                            s["hero_localized"] = h.get("localized_name")
+                            break
+                s["config_path_hint"] = (
+                    "<Steam>\\steamapps\\common\\dota 2 beta\\game\\dota\\cfg\\"
+                    "gamestate_integration\\gamestate_integration_drafthelper.cfg")
+                return self._json(s)
+            if url.path == "/api/gsi/config":
+                body = gsi.config_text(self.server.server_address[1]).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Disposition",
+                                 'attachment; filename="gamestate_integration_drafthelper.cfg"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return None
+            if url.path == "/api/build":
+                hero = (q.get("hero") or [None])[0]
+                if not hero:
+                    return self._json({"error": "не передан герой"}, 400)
+                months = int((q.get("months") or ["3"])[0])
+                return self._json(hero_build(src, int(hero), months))
             if url.path == "/api/tournaments/leagues":
                 months = int((q.get("months") or ["3"])[0])
                 return self._json({"leagues": src.tournament_leagues(months)})
@@ -524,6 +630,17 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length)
 
+            # сюда стучится сама игра через Game State Integration
+            if url.path == "/gsi":
+                try:
+                    gsi.handle(json.loads(raw or b"{}"))
+                except ValueError:
+                    pass
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return None
+
             # изображение приходит сырыми байтами, а не JSON
             if url.path == "/api/vision/recognize":
                 if not vision.AVAILABLE:
@@ -533,6 +650,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(get_watcher().scan_image(raw))
 
             data = json.loads(raw or b"{}")
+
+            if url.path == "/api/gsi/install":
+                path, msg = gsi.install(self.server.server_address[1])
+                return self._json({"path": path, "message": msg})
 
             if url.path == "/api/recommend":
                 enemy = data.get("enemy") or []

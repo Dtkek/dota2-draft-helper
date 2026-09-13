@@ -127,6 +127,22 @@
 
       <div class="col" style="flex: 2 1 560px">
         <div class="card">
+          <h2>Мой герой и сборка по про-матчам</h2>
+          <div class="controls">
+            <div><label>Мой герой</label><select id="my-hero"><option value="">— не выбран —</option></select></div>
+            <div><label>Игра сообщает</label><span id="gsi-status" class="dim">проверяю…</span></div>
+            <button class="tab" id="gsi-install">Подключить игру</button>
+            <a class="tab" id="gsi-download" href="/api/gsi/config" download>Скачать конфиг</a>
+          </div>
+          <div class="dim" style="margin:6px 0 8px">
+            «Подключить игру» кладёт в папку Dota конфиг Game State Integration — после
+            перезапуска игры она сама сообщает, за кого вы играете и за какую сторону.
+            Либо выберите героя руками или нажмите «это я» на распознанном союзнике.
+          </div>
+          <div id="build-out" class="empty-hint">Выберите своего героя — покажу стартовый закуп и порядок сборки из турнирных матчей.</div>
+        </div>
+
+        <div class="card">
           <h2>Кого брать</h2>
           <div class="controls">
             <div><label>Ранг</label><select id="bracket"></select></div>

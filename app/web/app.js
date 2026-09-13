@@ -167,7 +167,10 @@ async function boot() {
 
     renderHeroGrid();
     renderSlots();
+    fillMyHeroSelect();
     visionBoot();
+    pollGsi();
+    me.gsiTimer = setInterval(pollGsi, 3000);
   } catch (e) {
     bootFailed(e);
   }
@@ -424,6 +427,140 @@ function renderRecommendations(out, data) {
   out.appendChild(legend);
 }
 
+// ---------------------------------------------------------------- мой герой и сборка
+const me = { heroId: null, gsiTimer: null, gsiHero: null, gsiTeam: null };
+
+function fillMyHeroSelect() {
+  const sel = $('#my-hero');
+  const keep = sel.value;
+  sel.innerHTML = '<option value="">— не выбран —</option>';
+  state.heroes.forEach((h) => {
+    const o = document.createElement('option');
+    o.value = h.id;
+    o.textContent = h.name;
+    sel.appendChild(o);
+  });
+  if (keep) sel.value = keep;
+}
+
+$('#my-hero').addEventListener('change', () => {
+  setMyHero(Number($('#my-hero').value) || null, 'вручную');
+});
+
+function setMyHero(id, how) {
+  if (me.heroId === id) return;
+  me.heroId = id;
+  $('#my-hero').value = id ? String(id) : '';
+  // свой герой - это и союзник в драфте
+  if (id && !usedIds().has(id) && state.draft.ally.length < 5) {
+    state.draft.ally.push(id);
+    renderSlots();
+    renderHeroGrid();
+    refreshRecommendations();
+  }
+  loadBuild(how);
+}
+
+async function loadBuild(how) {
+  const out = $('#build-out');
+  if (!me.heroId) {
+    out.className = 'empty-hint';
+    out.textContent = 'Выберите своего героя — покажу стартовый закуп и порядок сборки из турнирных матчей.';
+    return;
+  }
+  const hero = state.byId.get(me.heroId);
+  out.className = 'loading';
+  out.textContent = `Собираю сборку ${hero ? hero.name : ''} по турнирным матчам…`;
+  try {
+    const b = await api(`/api/build?hero=${me.heroId}&months=${$('#tour-period').value}`);
+    out.className = '';
+    renderBuild(out, b, hero, how);
+  } catch (e) { out.className = ''; showError(out, e); }
+}
+
+function renderBuild(out, b, hero, how) {
+  out.innerHTML = '';
+  const head = el('div');
+  head.style.marginBottom = '8px';
+  const title = el('span', '', (hero ? hero.name : '') + ' ');
+  title.style.fontWeight = '600';
+  head.appendChild(title);
+  head.appendChild(el('span', 'dim',
+    b.games
+      ? `— ${b.games} турнирных игр за ${b.months} мес, винрейт ${b.winrate}%` +
+        (how ? ` · герой определён: ${how}` : '')
+      : '— в турнирах за этот период герой не встречался'));
+  out.appendChild(head);
+  if (!b.games) return;
+
+  const block = el('div', 'items');
+  const line = (title, nodes) => {
+    if (!nodes.length) return;
+    const row = el('div', 'items-row');
+    row.appendChild(el('span', 'dim items-title', title));
+    nodes.forEach((n) => row.appendChild(n));
+    block.appendChild(row);
+  };
+  line('старт', b.start.map((it) =>
+    itemIcon(it, it.count > 1 ? `×${it.count}` : `${it.share}%`)));
+  line('сборка', b.order.map((it) => itemIcon(it, `${it.minute}м`)));
+  line('ситуативно', b.situational.map((it) => itemIcon(it, `${it.share}%`)));
+  line('итог', b.final.map((it) => itemIcon(it, `${it.share}%`)));
+  out.appendChild(block);
+
+  const legend = el('div', 'dim');
+  legend.style.marginTop = '6px';
+  legend.textContent = 'Старт — куплено до рога хотя бы в 40% игр, число — сколько штук. ' +
+    'Сборка — предметы дороже 500 золота из ≥25% игр по медианной минуте покупки. ' +
+    'Ситуативно — дорогие предметы из 10–25% игр. Итог — что чаще всего в инвентаре к концу.';
+  out.appendChild(legend);
+}
+
+// --- Game State Integration: игра сама сообщает героя и сторону -----------
+async function pollGsi() {
+  try {
+    const s = await api('/api/gsi/state');
+    const box = $('#gsi-status');
+    if (!s.received) {
+      box.textContent = 'не подключена';
+      box.className = 'dim';
+    } else if (!s.alive) {
+      box.textContent = `молчит ${Math.round((Date.now() / 1000 - s.last_at))} с`;
+      box.className = 'dim';
+    } else {
+      const parts = [];
+      if (s.hero_localized) parts.push(s.hero_localized);
+      if (s.team) parts.push(s.team === 'radiant' ? 'Radiant' : 'Dire');
+      if (s.game_state) parts.push(s.game_state.replace('DOTA_GAMERULES_STATE_', '').toLowerCase());
+      box.textContent = parts.join(' · ') || 'подключена';
+      box.className = 'pos';
+    }
+    if (s.hero_id && s.hero_id !== me.gsiHero) {
+      me.gsiHero = s.hero_id;
+      setMyHero(s.hero_id, 'из игры');
+    }
+    // сторона из игры: в верхней полоске Radiant слева, Dire справа
+    if (s.team && s.team !== me.gsiTeam) {
+      me.gsiTeam = s.team;
+      const want = s.team === 'radiant' ? 'left' : 'right';
+      if ($('#vis-side').value !== want) {
+        $('#vis-side').value = want;
+        $('#vis-side').dispatchEvent(new Event('change'));
+      }
+    }
+  } catch (e) { /* сервер занят - подождём */ }
+}
+
+$('#gsi-install').addEventListener('click', async () => {
+  const box = $('#gsi-status');
+  box.textContent = 'ищу папку Dota…';
+  try {
+    const r = await api('/api/gsi/install', { method: 'POST' });
+    box.textContent = r.message + (r.path ? ` (${r.path})` : '');
+    box.className = r.path ? 'pos' : 'neg';
+  } catch (e) { box.textContent = 'ошибка: ' + e.message; box.className = 'neg'; }
+});
+
 // ---------------------------------------------------------------- чтение экрана
 const vision = { timer: null, running: false, lastKey: '', lastState: null };
 
@@ -644,7 +781,19 @@ function renderVision(vs) {
     chip.appendChild(el('span', 'dim', String(h.score)));
     const isAlly = ally.indexOf(h) !== -1;
     chip.title = isAlly ? 'определён как свой' : 'определён как враг';
-    if (isAlly) chip.style.borderColor = 'var(--radiant)';
+    if (isAlly) {
+      chip.style.borderColor = 'var(--radiant)';
+      // на своём герое - кнопка «это я»: сразу считается сборка
+      const meBtn = el('button', 'tab', me.heroId === h.hero_id ? 'это я ✓' : 'это я');
+      meBtn.style.padding = '2px 8px';
+      meBtn.style.fontSize = '11px';
+      meBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        setMyHero(h.hero_id, 'кнопка «это я»');
+        renderVision(vs);
+      });
+      chip.appendChild(meBtn);
+    }
     row.appendChild(chip);
   });
   out.appendChild(row);

@@ -295,6 +295,62 @@ class OpenDotaSource(HeroSource):
             "players": players,
         }
 
+    # --- сборка героя по про-матчам ------------------------------------
+    def hero_builds(self, hero_id, months=3, tier="top"):
+        """Агрегированные закупы героя в турнирных матчах.
+
+        Закупы каждой игры тянуть нельзя: 50 игр - 75 КБ, на слабом канале
+        не дойдёт. Агрегируем в базе: для каждого предмета - в скольких
+        играх куплен, сколько раз до рога, медианная секунда покупки.
+        Ответ - единицы килобайт. Возвращает (покупки, итоговые предметы).
+        """
+        hid = int(hero_id)
+        tiers = self.TIERS.get(tier, self.TIERS["top"])
+        tier_sql = ", ".join(f"'{t}'" for t in tiers)
+        period = f"m.start_time > extract(epoch from now() - interval '{int(months)} months')"
+
+        purchases = _explorer(f"""
+            with g as (
+              select pm.match_id, pm.purchase_log,
+                     ((pm.player_slot < 128) = m.radiant_win) as won
+              from player_matches pm
+              join matches m on m.match_id = pm.match_id
+              join leagues l on l.leagueid = m.leagueid
+              where pm.hero_id = {hid} and {period}
+                and l.tier in ({tier_sql}) and pm.purchase_log is not null
+            ),
+            p as (
+              select g.match_id, (e->>'key') as key, (e->>'time')::int as t
+              from g, unnest(g.purchase_log) e
+            )
+            select key,
+              count(distinct match_id) as games,
+              count(distinct case when t <= 0 then match_id end) as start_games,
+              sum(case when t <= 0 then 1 else 0 end)::float
+                / nullif(count(distinct case when t <= 0 then match_id end), 0)
+                as start_per_game,
+              percentile_cont(0.5) within group (order by t) filter (where t > 0)
+                as median_time,
+              (select count(*) from g) as total_games,
+              (select count(*) from g where won) as wins
+            from p group by key order by games desc
+        """, ttl=TTL_TOURNAMENT).get("rows") or []
+
+        final = _explorer(f"""
+            with g as (
+              select pm.item_0, pm.item_1, pm.item_2, pm.item_3, pm.item_4, pm.item_5
+              from player_matches pm
+              join matches m on m.match_id = pm.match_id
+              join leagues l on l.leagueid = m.leagueid
+              where pm.hero_id = {hid} and {period} and l.tier in ({tier_sql})
+            )
+            select item_id, count(*) as games, (select count(*) from g) as total
+            from (select unnest(array[item_0, item_1, item_2, item_3, item_4, item_5])
+                  as item_id from g) t
+            where item_id > 0 group by item_id order by games desc limit 20
+        """, ttl=TTL_TOURNAMENT).get("rows") or []
+        return purchases, final
+
     # --- предметы ---------------------------------------------------------
     def items(self):
         """Справочник предметов: {внутреннее_имя: {id, dname, img, cost, qual}}.
