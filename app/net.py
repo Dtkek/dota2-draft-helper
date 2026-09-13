@@ -75,7 +75,7 @@ def _fetch_curl(url, timeout):
     return json.loads(out.stdout)
 
 
-def get_json(url, ttl=3600, timeout=30, stale_ok=True):
+def get_json(url, ttl=3600, timeout=20, stale_ok=True):
     """Забирает JSON по url. ttl — сколько секунд кэш считается свежим.
 
     Если сеть недоступна, а в кэше есть просроченная копия, возвращается она
