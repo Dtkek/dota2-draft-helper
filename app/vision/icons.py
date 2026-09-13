@@ -18,29 +18,46 @@ def portrait_path(hero_id):
     return os.path.join(ASSETS, f"{hero_id}.png")
 
 
-def ensure_icons(source, progress=None):
-    """Скачивает портреты всех героев. Возвращает (скачано, пропущено, всего).
+def ensure_icons(source, progress=None, workers=4):
+    """Скачивает портреты всех героев.
 
-    Вызывается один раз: дальше файлы лежат локально и сеть не нужна.
+    Возвращает (скачано, не удалось, всего, причина_последней_ошибки).
+    Причина обязательна: без неё «0 из 127» ничего не объясняет.
+
+    Качаем в несколько потоков: 127 файлов по одному — это минута даже
+    на быстром канале, а при подвисании каждого запроса — десятки минут.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     stats = source.hero_stats()
-    downloaded = failed = 0
-    for i, h in enumerate(stats):
+    todo = []
+    for h in stats:
         dest = portrait_path(h["id"])
         if os.path.exists(dest) and os.path.getsize(dest) > 0:
             continue
         img = h.get("img")
-        if not img:
-            failed += 1
-            continue
-        url = CDN + img.split("?")[0]
-        if net.download(url, dest):
-            downloaded += 1
-        else:
-            failed += 1
-        if progress:
-            progress(i + 1, len(stats))
-    return downloaded, failed, len(stats)
+        if img:
+            todo.append((CDN + img.split("?")[0], dest))
+
+    downloaded = failed = 0
+    last_error = None
+    done = len(stats) - len(todo)
+    if progress:
+        progress(done, len(stats))
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(net.download, url, dest): url for url, dest in todo}
+        for fut in as_completed(futures):
+            ok, err = fut.result()
+            if ok:
+                downloaded += 1
+            else:
+                failed += 1
+                last_error = f"{futures[fut].rsplit('/', 1)[-1]} — {err}"
+            done += 1
+            if progress:
+                progress(done, len(stats))
+    return downloaded, failed, len(stats), last_error
 
 
 def available_ids():

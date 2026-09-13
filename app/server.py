@@ -77,7 +77,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-13.12"
+VERSION = "2026-09-13.13"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -424,12 +424,13 @@ class Handler(BaseHTTPRequestHandler):
 
                 if action == "icons":
                     from vision import icons
-                    got, failed, total = icons.ensure_icons(src)
+                    got, failed, total, reason = icons.ensure_icons(src)
                     # без перечитывания распознаватель остался бы пустым
                     # до перезапуска сервера
                     ready = get_watcher().reload_templates()
                     return self._json({"downloaded": got, "failed": failed,
                                        "total": total, "ready": ready,
+                                       "reason": reason,
                                        "have": len(icons.available_ids())})
 
                 w = get_watcher()

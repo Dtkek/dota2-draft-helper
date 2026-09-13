@@ -458,7 +458,7 @@ $('#vis-icons').addEventListener('click', async (e) => {
     const r = await api('/api/vision/icons', { method: 'POST' });
     $('#vision-status').textContent =
       `Портретов на диске: ${r.have} из ${r.total}` +
-      (r.failed ? `, не удалось скачать: ${r.failed}` : '') +
+      (r.failed ? `, не удалось скачать: ${r.failed}. Причина: ${r.reason}` : '') +
       (r.ready ? '. Можно включать слежение.' : '');
   } catch (err) { showError($('#vision-status'), err); }
   btn.disabled = false;

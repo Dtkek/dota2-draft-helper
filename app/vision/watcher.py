@@ -68,11 +68,20 @@ class ScreenWatcher:
 
         self._set(mode="скачиваю портреты героев…", last_error=None)
         try:
-            icons.ensure_icons(self.source, progress)
+            got, failed, total, reason = icons.ensure_icons(self.source, progress)
         except Exception as e:  # noqa: BLE001
             self._set(last_error=f"не удалось скачать портреты: {e}")
             return False
-        return self.reload_templates()
+
+        ready = self.reload_templates()
+        if failed:
+            # причина обязательна: раньше здесь молча получалось «0 из 127»
+            self._set(last_error=(
+                f"портреты: скачано {got}, не удалось {failed} из {total}. "
+                f"Последняя ошибка: {reason}"))
+        if not ready:
+            self._set(mode="остановлено: нет эталонов героев")
+        return ready
 
     # --- управление -------------------------------------------------------
     def start(self):

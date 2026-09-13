@@ -157,33 +157,64 @@ def refresh_in_background(url, ttl=3600):
     return t
 
 
-def download(url, dest, timeout=60):
-    """Скачивает файл (картинку) в dest. Возвращает True, если файл на месте."""
+def _download_urllib(url, tmp, timeout):
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=timeout, context=_context()) as r:
+        data = r.read()
+    if not data:
+        raise RuntimeError("пустой ответ")
+    with open(tmp, "wb") as f:
+        f.write(data)
+
+
+def _download_curl(url, tmp, timeout):
+    out = subprocess.run(
+        ["curl", "-sS", "-L", "--max-time", str(timeout),
+         "-H", f"User-Agent: {UA}", "-o", tmp, url],
+        capture_output=True, text=True,
+    )
+    if out.returncode != 0:
+        raise RuntimeError(f"curl: {out.stderr.strip()[:160] or 'код ' + str(out.returncode)}")
+    if not os.path.exists(tmp):
+        raise RuntimeError("curl не создал файл")
+
+
+def download(url, dest, timeout=20):
+    """Скачивает файл (картинку) в dest.
+
+    Возвращает (True, None) при успехе или (False, причина). Причина нужна
+    обязательно: молчаливый False оставлял пользователя с «0 из 127» и без
+    единой подсказки, что произошло.
+
+    Способ скачивания липкий, как в get_json: если urllib однажды не смог,
+    дальше сразу идём через curl. Иначе на канале, где urllib подвисает,
+    127 портретов ждали бы по таймауту каждый.
+    """
+    global _use_curl
     if os.path.exists(dest) and os.path.getsize(dest) > 0:
-        return True
+        return True, None
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     tmp = dest + ".part"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=timeout, context=_context()) as r:
-            data = r.read()
-        if not data:
-            raise RuntimeError("пустой ответ")
-        with open(tmp, "wb") as f:
-            f.write(data)
-    except Exception:  # noqa: BLE001 — на Windows сертификаты бывают не настроены
-        out = subprocess.run(
-            ["curl", "-sS", "-L", "--max-time", str(timeout),
-             "-H", f"User-Agent: {UA}", "-o", tmp, url],
-            capture_output=True, text=True,
-        )
-        if out.returncode != 0 or not os.path.exists(tmp):
-            return False
-    if os.path.getsize(tmp) == 0:
-        os.remove(tmp)
-        return False
-    os.replace(tmp, dest)
-    return True
+
+    errors = []
+    order = (_download_curl, _download_urllib) if _use_curl else (_download_urllib, _download_curl)
+    for fetch in order:
+        try:
+            fetch(url, tmp, timeout)
+            if os.path.getsize(tmp) == 0:
+                raise RuntimeError("скачан пустой файл")
+            _use_curl = fetch is _download_curl
+            os.replace(tmp, dest)
+            return True, None
+        except Exception as e:  # noqa: BLE001 — пробуем второй способ
+            errors.append(f"{fetch.__name__.replace('_download_', '')}: "
+                          f"{type(e).__name__}: {str(e)[:120]}")
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
+    return False, "; ".join(errors)
 
 
 def clear_cache():
