@@ -1,0 +1,14 @@
+# Batch-файлы Windows обязаны иметь переводы строк CRLF.
+# С переводами строк в формате Unix команды goto в cmd.exe работают неверно,
+# а файл собирался на macOS, где по умолчанию LF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Остальное держим в LF
+*.py text eol=lf
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
