@@ -84,7 +84,8 @@ MIME = {
 
 
 def hero_list(source):
-    """Справочник героев для интерфейса: имя, картинка, роли."""
+    """Справочник героев для интерфейса: имя, картинка, роли, позиции."""
+    positions = hero_positions()
     out = []
     for h in source.hero_stats():
         out.append({
@@ -92,10 +93,60 @@ def hero_list(source):
             "name": h.get("localized_name"),
             "img": CDN + h["img"] if h.get("img") else None,
             "roles": h.get("roles") or [],
+            "positions": positions.get(h["id"], []),
             "attr": h.get("primary_attr"),
         })
     out.sort(key=lambda x: (x["name"] or "").lower())
     return out
+
+
+POSITIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "data", "positions.json")
+
+POSITION_LABELS = [
+    ("1", "Керри (1)"),
+    ("2", "Мид (2)"),
+    ("3", "Хард (3)"),
+    ("4", "Роумер (4)"),
+    ("5", "Хардсаппорт (5)"),
+]
+
+_positions_cache = None
+
+
+def hero_positions():
+    """Справочник позиций: {hero_id: [позиции]}.
+
+    Это не данные источника, а файл, составленный вручную: OpenDota позиций
+    не отдаёт. Файл перечитывается при изменении, чтобы правки подхватывались
+    без перезапуска сервера.
+    """
+    global _positions_cache
+    try:
+        mtime = os.path.getmtime(POSITIONS_FILE)
+    except OSError:
+        return {}
+    if _positions_cache and _positions_cache[0] == mtime:
+        return _positions_cache[1]
+    try:
+        with open(POSITIONS_FILE, encoding="utf-8") as f:
+            raw = json.load(f).get("positions", {})
+        table = {int(k): list(v) for k, v in raw.items()}
+    except (OSError, ValueError):
+        return {}
+    _positions_cache = (mtime, table)
+    return table
+
+
+def ids_for_position(position):
+    """id героев, играющих на этой позиции. None — фильтр не задан."""
+    if not position:
+        return None
+    try:
+        want = int(position)
+    except (TypeError, ValueError):
+        return None
+    return {hid for hid, pos in hero_positions().items() if want in pos}
 
 
 def resolve_bracket(source, requested):
@@ -111,13 +162,15 @@ def resolve_bracket(source, requested):
                    f"показаны все ранги")
 
 
-def meta_table(source, bracket, role=None):
+def meta_table(source, bracket, role=None, allowed_ids=None):
     """Таблица меты: винрейт, доля пиков, про-пики и про-баны."""
     stats = source.hero_stats()
     total_picks = 0
     rows = []
     for h in stats:
         picks, wins = source.picks_wins(h, bracket)
+        if allowed_ids is not None and h["id"] not in allowed_ids:
+            continue
         if role and role not in (h.get("roles") or []):
             continue
         total_picks += picks
@@ -253,13 +306,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({
                     "heroes": hero_list(src),
                     "brackets": src.available_brackets(),
+                    "positions": [{"key": k, "label": v}
+                                  for k, v in POSITION_LABELS],
                     "source": src.name,
                 })
             if url.path == "/api/meta":
                 bracket, note = resolve_bracket(src, q.get("bracket", ["all"])[0])
                 return self._json({
-                    "rows": meta_table(src, bracket,
-                                       (q.get("role") or [None])[0] or None),
+                    "rows": meta_table(
+                        src, bracket,
+                        (q.get("role") or [None])[0] or None,
+                        ids_for_position((q.get("position") or [None])[0])),
                     "bracket_used": bracket,
                     "note": note,
                 })
@@ -305,6 +362,7 @@ class Handler(BaseHTTPRequestHandler):
                     bracket=bracket,
                     role=data.get("role") or None,
                     limit=int(data.get("limit") or 15),
+                    allowed_ids=ids_for_position(data.get("position")),
                 )
                 return self._json({
                     "rows": rows,

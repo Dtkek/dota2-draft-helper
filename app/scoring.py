@@ -144,7 +144,7 @@ def matchup_tables(source, enemy_ids):
 
 
 def recommend(source, enemy_ids, ally_ids=(), banned_ids=(), bracket="all",
-              role=None, limit=15):
+              role=None, limit=15, allowed_ids=None):
     """Топ героев против вражеского драфта.
 
     enemy_ids — герои противника, ally_ids — уже взятые свои,
@@ -159,6 +159,10 @@ def recommend(source, enemy_ids, ally_ids=(), banned_ids=(), bracket="all",
     results = []
     for hero_id, stat in stats_by_id.items():
         if hero_id in excluded:
+            continue
+        # allowed_ids — фильтр по позиции: он приходит снаружи, потому что
+        # позиции берутся из отдельного справочника, а не из данных источника
+        if allowed_ids is not None and hero_id not in allowed_ids:
             continue
         if role and role not in (stat.get("roles") or []):
             continue

@@ -11,6 +11,20 @@ const state = {
   search: '',
 };
 
+// Роли приходят от OpenDota на английском, а интерфейс русский.
+// Значение в списке остаётся английским: по нему фильтрует сервер.
+const ROLE_LABELS = {
+  Carry: 'Кэрри',
+  Support: 'Поддержка',
+  Nuker: 'Нюкер',
+  Disabler: 'Контроль',
+  Durable: 'Живучесть',
+  Escape: 'Уход',
+  Pusher: 'Пушер',
+  Initiator: 'Инициатор',
+};
+const roleLabel = (r) => ROLE_LABELS[r] || r;
+
 const $ = (sel) => document.querySelector(sel);
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -61,8 +75,10 @@ async function boot() {
 
     fillSelect($('#bracket'), state.brackets.map((b) => [b.key, b.label]));
     fillSelect($('#meta-bracket'), state.brackets.map((b) => [b.key, b.label]));
-    fillSelect($('#role'), [['', 'Любая']].concat(state.roles.map((r) => [r, r])));
-    fillSelect($('#meta-role'), [['', 'Любая']].concat(state.roles.map((r) => [r, r])));
+    const posOptions = [['', 'Любая']]
+      .concat((data.positions || []).map((p) => [p.key, p.label]));
+    fillSelect($('#position'), posOptions);
+    fillSelect($('#meta-position'), posOptions);
 
     renderHeroGrid();
     renderSlots();
@@ -163,7 +179,7 @@ function renderSlots() {
     });
 }
 
-['#bracket', '#role', '#limit'].forEach((sel) =>
+['#bracket', '#position', '#limit'].forEach((sel) =>
   $(sel).addEventListener('change', refreshRecommendations));
 
 let recToken = 0;
