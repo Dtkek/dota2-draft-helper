@@ -351,6 +351,20 @@ class OpenDotaSource(HeroSource):
         """, ttl=TTL_TOURNAMENT).get("rows") or []
         return purchases, final
 
+    # --- аккаунт игрока ---------------------------------------------------
+    # Данные публичные при включённой в Steam настройке «Открытая история
+    # матчей»; без неё OpenDota о игроке ничего не знает.
+
+    def player_profile(self, account_id):
+        return get_json(f"{API}/players/{int(account_id)}", ttl=24 * 3600)
+
+    def player_heroes(self, account_id):
+        """Игры и победы на каждом герое, с ним и против него."""
+        return get_json(f"{API}/players/{int(account_id)}/heroes", ttl=3600)
+
+    def player_wl(self, account_id):
+        return get_json(f"{API}/players/{int(account_id)}/wl", ttl=3600)
+
     # --- предметы ---------------------------------------------------------
     def items(self):
         """Справочник предметов: {внутреннее_имя: {id, dname, img, cost, qual}}.

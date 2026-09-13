@@ -143,6 +143,27 @@
         </div>
 
         <div class="card">
+          <h2>Мой аккаунт</h2>
+          <div class="controls">
+            <input type="text" id="account-input" placeholder="ID аккаунта, Steam64 или ссылка на профиль OpenDota / Dotabuff"
+                   style="flex:1 1 320px">
+            <button class="tab" id="account-apply">Подключить</button>
+            <div><label>В подборе</label>
+              <select id="personal-weight">
+                <option value="1" selected>учитывать</option>
+                <option value="1.5">приоритет</option>
+                <option value="0">не учитывать</option>
+              </select>
+            </div>
+          </div>
+          <div id="account-out" class="dim" style="margin-top:6px">
+            Подбор будет учитывать, на ком вы сами играете лучше: личный винрейт на герое и опыт.
+            Нужна включённая в Steam настройка «Открытая история матчей». Если игра подключена
+            через GSI, аккаунт подхватится сам.
+          </div>
+        </div>
+
+        <div class="card">
           <h2>Кого брать</h2>
           <div class="controls">
             <div><label>Ранг</label><select id="bracket"></select></div>

@@ -45,6 +45,14 @@ W_BASE = 0.6
 # приоритет. Из интерфейса переключается: 0 - не учитывать, 0.6 - умеренно.
 W_TOUR = 1.5
 
+# Личная составляющая: как сам игрок играет на герое. Складывается из
+# личного винрейта относительно общего (сжатого по числу игр) и опыта
+# на герое: сотня игр на герое стоит больше, чем удачные три.
+W_PERSONAL = 1.0
+PERSONAL_WR_K = 20        # при стольких играх личный винрейт учитывается наполовину
+PERSONAL_WR_SCALE = 0.5
+PERSONAL_GAMES_SCALE = 0.01  # масштаб log(1 + игр) относительно среднего
+
 # при таком числе турнирных пиков винрейт учитывается наполовину
 TOUR_WR_K = 30
 # масштаб спорности (пики+баны / матчей), чтобы единицы совпали с матчапами
@@ -176,6 +184,40 @@ def tournament_strength(rows, total_matches):
     return out
 
 
+def personal_strength(player_heroes, wl):
+    """Личная сила на герое: {hero_id: доля} + сводка для показа.
+
+    1. личный винрейт минус общий винрейт игрока, сжатый по числу игр:
+       три победы из трёх ничего не значат, тридцать из сорока - значат;
+    2. опыт: log(1 + игр) относительно среднего по героям - герой, которого
+       игрок ни разу не брал, получает минус, основной герой - плюс.
+    """
+    import math
+    if not player_heroes:
+        return {}, {}
+    total_w = int((wl or {}).get("win") or 0)
+    total_l = int((wl or {}).get("lose") or 0)
+    overall = total_w / (total_w + total_l) if (total_w + total_l) else 0.5
+
+    logs = {}
+    for r in player_heroes:
+        logs[int(r["hero_id"])] = math.log1p(int(r.get("games") or 0))
+    mean_log = sum(logs.values()) / max(len(logs), 1)
+
+    strength, info = {}, {}
+    for r in player_heroes:
+        hid = int(r["hero_id"])
+        g = int(r.get("games") or 0)
+        w = int(r.get("win") or 0)
+        wr_part = 0.0
+        if g:
+            wr_part = PERSONAL_WR_SCALE * (w / g - overall) * g / (g + PERSONAL_WR_K)
+        exp_part = PERSONAL_GAMES_SCALE * (logs[hid] - mean_log)
+        strength[hid] = wr_part + exp_part
+        info[hid] = {"games": g, "winrate": round(w / g * 100, 1) if g else None}
+    return strength, info
+
+
 def matchup_tables(source, enemy_ids):
     """Сглаженные таблицы матчапов + использованное значение K."""
     raw = {e: raw_matchup_table(source, e) for e in enemy_ids}
@@ -184,7 +226,8 @@ def matchup_tables(source, enemy_ids):
 
 
 def recommend(source, enemy_ids, ally_ids=(), banned_ids=(), bracket="all",
-              role=None, limit=15, allowed_ids=None, tour=None, tour_weight=W_TOUR):
+              role=None, limit=15, allowed_ids=None, tour=None, tour_weight=W_TOUR,
+              personal=None, personal_info=None, personal_weight=W_PERSONAL):
     """Топ героев против вражеского драфта.
 
     enemy_ids — герои противника, ally_ids — уже взятые свои,
@@ -228,11 +271,16 @@ def recommend(source, enemy_ids, ally_ids=(), banned_ids=(), bracket="all",
         # турнирная составляющая: словарь приходит снаружи, потому что
         # его источник и период выбирает сервер, а не логика подбора
         tour_val = (tour or {}).get(hero_id, 0.0) if tour_weight else 0.0
+        pers_val = (personal or {}).get(hero_id, 0.0) if personal_weight else 0.0
+        mine = (personal_info or {}).get(hero_id) or {}
 
         score = (W_MATCHUP * matchup_avg + W_BASE * base_delta
-                 + tour_weight * tour_val)
+                 + tour_weight * tour_val + personal_weight * pers_val)
 
         results.append({
+            "personal_pp": round(personal_weight * pers_val * 100, 2),
+            "my_games": mine.get("games"),
+            "my_winrate": mine.get("winrate"),
             "hero_id": hero_id,
             "name": stat.get("localized_name"),
             "img": stat.get("img"),

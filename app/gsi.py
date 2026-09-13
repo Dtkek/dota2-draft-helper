@@ -33,6 +33,7 @@ _state = {
     "hero_name": None,
     "hero_id": None,
     "player_name": None,
+    "steamid": None,
 }
 
 
@@ -77,6 +78,8 @@ def handle(payload):
             _state["team"] = player["team_name"]
         if player.get("name"):
             _state["player_name"] = player["name"]
+        if player.get("steamid"):
+            _state["steamid"] = str(player["steamid"])
         # герой появляется, когда выбран; между играми блок пустой
         if hero.get("name"):
             _state["hero_name"] = hero["name"]

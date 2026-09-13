@@ -91,7 +91,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-13.23"
+VERSION = "2026-09-13.24"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -300,6 +300,64 @@ def item_builds(player, items_by_name, items_by_id):
             neutral = info(name)
     return {"start": start, "build": build, "final": final, "neutral": neutral,
             "has_log": bool(log)}
+
+
+STEAM64_BASE = 76561197960265728
+
+
+def parse_account(text):
+    """Достаёт account_id из того, что человек скопировал.
+
+    Понимает: числовой account_id, Steam64, ссылки на профиль OpenDota,
+    Dotabuff и steamcommunity.com/profiles/. Ссылку вида
+    steamcommunity.com/id/<имя> разобрать нельзя без ключа Steam API.
+    """
+    import re
+    s = (text or "").strip()
+    if not s:
+        return None, "пусто"
+    m = re.search(r"/(?:players|profiles)/(\d+)", s)
+    if m:
+        s = m.group(1)
+    if "steamcommunity.com/id/" in s:
+        return None, ("ссылка с именем профиля не подходит — нужен числовой ID: "
+                      "откройте свой профиль на opendota.com или dotabuff.com "
+                      "и скопируйте ссылку оттуда")
+    if not s.isdigit():
+        return None, "не похоже на ID: нужны только цифры или ссылка на профиль"
+    n = int(s)
+    if n > STEAM64_BASE:
+        n -= STEAM64_BASE
+    return n, None
+
+
+def player_summary(source, account_id):
+    """Профиль игрока для проверки: ник, ранг, игры, топ героев."""
+    prof = source.player_profile(account_id) or {}
+    p = prof.get("profile") or {}
+    wl = source.player_wl(account_id) or {}
+    heroes = source.player_heroes(account_id) or []
+    stats_by_id = {h["id"]: h for h in source.hero_stats()}
+    total = int(wl.get("win") or 0) + int(wl.get("lose") or 0)
+    top = sorted(heroes, key=lambda h: -int(h.get("games") or 0))[:8]
+    return {
+        "account_id": account_id,
+        "name": p.get("personaname"),
+        "avatar": p.get("avatarfull"),
+        "rank_tier": prof.get("rank_tier"),
+        "games": total,
+        "winrate": round(int(wl.get("win") or 0) / total * 100, 1) if total else None,
+        "public": total > 0,
+        "top_heroes": [{
+            "id": h["hero_id"],
+            "name": stats_by_id.get(h["hero_id"], {}).get("localized_name"),
+            "img": CDN + stats_by_id[h["hero_id"]]["img"]
+                   if stats_by_id.get(h["hero_id"], {}).get("img") else None,
+            "games": int(h.get("games") or 0),
+            "winrate": round(int(h.get("win") or 0) / int(h["games"]) * 100)
+                       if int(h.get("games") or 0) else None,
+        } for h in top],
+    }
 
 
 def hero_build(source, hero_id, months=3):
@@ -575,6 +633,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
                 return None
+            if url.path == "/api/player":
+                acc, err = parse_account((q.get("id") or [""])[0])
+                if err:
+                    return self._json({"error": err}, 400)
+                return self._json(player_summary(src, acc))
             if url.path == "/api/build":
                 hero = (q.get("hero") or [None])[0]
                 if not hero:
@@ -675,6 +738,34 @@ class Handler(BaseHTTPRequestHandler):
                         tour_note = f"турнирная статистика недоступна: {str(e)[:120]}"
                         tour_weight = 0.0
 
+                # личная составляющая: по аккаунту игрока, если он указан
+                personal, personal_info, personal_note = None, None, None
+                personal_weight = float(data.get("personal_weight", scoring.W_PERSONAL))
+                account = data.get("account")
+                if account and personal_weight > 0:
+                    acc, err = parse_account(str(account))
+                    if err:
+                        personal_note, personal_weight = err, 0.0
+                    else:
+                        try:
+                            ph = src.player_heroes(acc)
+                            wl = src.player_wl(acc) or {}
+                            total_games = int(wl.get("win") or 0) + int(wl.get("lose") or 0)
+                            # пустой аккаунт отдаёт 127 строк с нулями, а не пустой
+                            # список - проверять надо по общему числу игр
+                            if not total_games:
+                                personal_note = (f"по аккаунту {acc} нет ни одной игры: "
+                                                 "история матчей в Steam закрыта "
+                                                 "(«Открытая история матчей») или ID не тот")
+                                personal_weight = 0.0
+                            else:
+                                personal, personal_info = scoring.personal_strength(ph, wl)
+                        except Exception as e:  # noqa: BLE001
+                            personal_note = f"данные аккаунта недоступны: {str(e)[:120]}"
+                            personal_weight = 0.0
+                else:
+                    personal_weight = 0.0
+
                 rows, k_shrink = scoring.recommend(
                     src,
                     enemy_ids=enemy,
@@ -686,6 +777,9 @@ class Handler(BaseHTTPRequestHandler):
                     allowed_ids=ids_for_position(data.get("position")),
                     tour=tour,
                     tour_weight=tour_weight,
+                    personal=personal,
+                    personal_info=personal_info,
+                    personal_weight=personal_weight,
                 )
                 return self._json({
                     "rows": rows,
@@ -696,6 +790,8 @@ class Handler(BaseHTTPRequestHandler):
                     "tour_weight": tour_weight,
                     "tour_matches": tour_matches,
                     "tour_note": tour_note,
+                    "personal_weight": personal_weight,
+                    "personal_note": personal_note,
                 })
 
             if url.path.startswith("/api/vision/"):

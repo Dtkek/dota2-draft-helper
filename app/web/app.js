@@ -169,6 +169,11 @@ async function boot() {
     renderSlots();
     fillMyHeroSelect();
     visionBoot();
+    const savedAccount = loadAccount();
+    if (savedAccount) {
+      $('#account-input').value = savedAccount;
+      applyAccount(savedAccount, 'сохранён');
+    }
     pollGsi();
     me.gsiTimer = setInterval(pollGsi, 3000);
   } catch (e) {
@@ -328,6 +333,8 @@ async function refreshRecommendations() {
         limit: Number($('#limit').value),
         tour_weight: Number($('#tour-weight').value),
         tour_months: Number($('#tour-period').value),
+        account: account.id,
+        personal_weight: Number($('#personal-weight').value),
       }),
     });
     if (token !== recToken) return;
@@ -342,17 +349,20 @@ function renderRecommendations(out, data) {
   out.innerHTML = '';
   if (data.note) out.appendChild(el('div', 'error', 'Внимание: ' + data.note));
   if (data.tour_note) out.appendChild(el('div', 'error', data.tour_note));
+  if (data.personal_note) out.appendChild(el('div', 'error', data.personal_note));
   if (!rows.length) {
     out.appendChild(el('div', 'empty-hint', 'Ничего не подошло под фильтры.'));
     return;
   }
   const withTour = data.tour_weight > 0;
+  const withMe = data.personal_weight > 0;
   const max = Math.max(...rows.map((r) => Math.abs(r.score_pp)), 1);
   const table = el('table');
   table.innerHTML = `<thead><tr>
       <th>#</th><th>Герой</th><th class="num">Балл</th>
       <th class="num">Матчапы</th><th class="num">База</th>
       ${withTour ? '<th class="num">Турниры</th>' : ''}
+      ${withMe ? '<th class="num">Мои</th><th class="num">Мои игры</th>' : ''}
       <th class="num">Винрейт</th><th class="num">Выборка</th>
       <th>Против кого</th></tr></thead>`;
   const tb = el('tbody');
@@ -391,6 +401,13 @@ function renderRecommendations(out, data) {
       const tp = r.tour_pp || 0;
       tr.appendChild(el('td', 'num ' + cls(tp), sign(tp)));
     }
+    if (withMe) {
+      const pp = r.personal_pp || 0;
+      tr.appendChild(el('td', 'num ' + cls(pp), sign(pp)));
+      const mine = r.my_games
+        ? `${r.my_games} · ${r.my_winrate}%` : '—';
+      tr.appendChild(el('td', 'num dim', mine));
+    }
     tr.appendChild(el('td', 'num', r.base_winrate === null ? '—' : r.base_winrate.toFixed(1) + '%'));
     tr.appendChild(el('td', 'num dim', String(r.games_total)));
 
@@ -421,6 +438,10 @@ function renderRecommendations(out, data) {
     (withTour
       ? `Турниры — востребованность и винрейт у про за выбранный период (${data.tour_matches} матчей), ` +
         `вес ${data.tour_weight}: чем выше, тем сильнее турнирная мета перевешивает остальное. `
+      : '') +
+    (withMe
+      ? 'Мои — ваш личный винрейт на герое относительно общего и опыт на нём: ' +
+        'герой, которого вы не брали, получает минус, основной — плюс. '
       : '') +
     'Полупрозрачные пары — менее 15 игр в выборке. ' +
     'Сглаживание K = ' + orDash(data.k_shrink) + '.';
@@ -516,6 +537,81 @@ function renderBuild(out, b, hero, how) {
   out.appendChild(legend);
 }
 
+// --- мой аккаунт: личная статистика в подборе -----------------------------
+const ACCOUNT_KEY = 'draft-helper.account';
+const account = { id: null, name: null };
+
+function loadAccount() {
+  try { return localStorage.getItem(ACCOUNT_KEY) || ''; } catch (e) { return ''; }
+}
+function saveAccount(v) {
+  try { localStorage.setItem(ACCOUNT_KEY, v || ''); } catch (e) { /* ничего */ }
+}
+
+async function applyAccount(text, how) {
+  const out = $('#account-out');
+  if (!text) {
+    account.id = null;
+    saveAccount('');
+    out.className = 'dim';
+    out.textContent = 'Аккаунт не задан — подбор без личной статистики.';
+    refreshRecommendations();
+    return;
+  }
+  out.className = 'loading';
+  out.textContent = 'Проверяю аккаунт…';
+  try {
+    const p = await api('/api/player?id=' + encodeURIComponent(text));
+    account.id = p.account_id;
+    account.name = p.name;
+    saveAccount(String(p.account_id));
+    out.className = '';
+    out.innerHTML = '';
+    if (!p.public) {
+      out.appendChild(el('div', 'error',
+        `Аккаунт ${p.account_id} найден, но игр по нему нет: скорее всего в Steam закрыта ` +
+        '«Открытая история матчей» (Steam → профиль → настройки приватности → Dota 2). ' +
+        'Включите — и через несколько игр данные появятся.'));
+      return;
+    }
+    const head = el('div');
+    head.innerHTML = `<b>${p.name || p.account_id}</b> <span class="dim">· ${p.games} игр, ` +
+      `винрейт ${p.winrate}%` + (p.rank_tier ? ` · ранг ${rankName(p.rank_tier)}` : '') +
+      (how ? ` · ${how}` : '') + '</span>';
+    out.appendChild(head);
+    const row = el('div', 'draft-row');
+    row.style.marginTop = '6px';
+    p.top_heroes.forEach((h) => {
+      const chip = el('div', 'chip');
+      chip.style.cursor = 'default';
+      if (h.img) { const img = el('img'); img.src = h.img; img.alt = h.name; chip.appendChild(img); }
+      chip.appendChild(el('span', '', h.name));
+      chip.appendChild(el('span', 'dim', `${h.games} · ${h.winrate}%`));
+      row.appendChild(chip);
+    });
+    out.appendChild(row);
+    refreshRecommendations();
+  } catch (e) {
+    out.className = '';
+    showError(out, e);
+  }
+}
+
+function rankName(tier) {
+  const names = ['', 'Herald', 'Guardian', 'Crusader', 'Archon', 'Legend', 'Ancient', 'Divine', 'Immortal'];
+  const major = Math.floor(tier / 10);
+  const star = tier % 10;
+  return (names[major] || '?') + (star && major < 8 ? ` ${star}` : '');
+}
+
+$('#account-apply').addEventListener('click', () => {
+  applyAccount($('#account-input').value.trim(), 'введён вручную');
+});
+$('#account-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') applyAccount($('#account-input').value.trim(), 'введён вручную');
+});
+$('#personal-weight').addEventListener('change', refreshRecommendations);
+
 // --- Game State Integration: игра сама сообщает героя и сторону -----------
 async function pollGsi() {
   try {
@@ -538,6 +634,12 @@ async function pollGsi() {
     if (s.hero_id && s.hero_id !== me.gsiHero) {
       me.gsiHero = s.hero_id;
       setMyHero(s.hero_id, 'из игры');
+    }
+    // Steam ID из игры -> аккаунт для личной статистики, если ещё не задан
+    if (s.steamid && !account.id && !me.gsiSteam) {
+      me.gsiSteam = s.steamid;
+      $('#account-input').value = s.steamid;
+      applyAccount(s.steamid, 'из игры');
     }
     // сторона из игры: в верхней полоске Radiant слева, Dire справа
     if (s.team && s.team !== me.gsiTeam) {
