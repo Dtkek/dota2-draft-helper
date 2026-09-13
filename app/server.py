@@ -37,9 +37,10 @@ def get_watcher():
     with _watcher_lock:
         if _watcher is None:
             from vision.watcher import ScreenWatcher
-            names = {h["id"]: h.get("localized_name")
-                     for h in get_source().hero_stats()}
-            _watcher = ScreenWatcher(names)
+            src = get_source()
+            names = {h["id"]: h.get("localized_name") for h in src.hero_stats()}
+            # источник нужен наблюдателю, чтобы самому докачать портреты
+            _watcher = ScreenWatcher(names, source=src)
         return _watcher
 
 
@@ -321,8 +322,11 @@ class Handler(BaseHTTPRequestHandler):
                 if action == "icons":
                     from vision import icons
                     got, failed, total = icons.ensure_icons(src)
+                    # без перечитывания распознаватель остался бы пустым
+                    # до перезапуска сервера
+                    ready = get_watcher().reload_templates()
                     return self._json({"downloaded": got, "failed": failed,
-                                       "total": total,
+                                       "total": total, "ready": ready,
                                        "have": len(icons.available_ids())})
 
                 w = get_watcher()

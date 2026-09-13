@@ -13,8 +13,11 @@ from vision import capture, recognize
 
 
 class ScreenWatcher:
-    def __init__(self, hero_names=None, interval=2.0, monitor=1, region=None):
-        self.recognizer = recognize.Recognizer(hero_names)
+    def __init__(self, hero_names=None, source=None, interval=2.0, monitor=1,
+                 region=None):
+        self.hero_names = hero_names or {}
+        self.source = source
+        self.recognizer = recognize.Recognizer(self.hero_names)
         self.interval = interval
         self.monitor = monitor
         # по умолчанию верхняя половина экрана: там идёт драфт
@@ -43,21 +46,58 @@ class ScreenWatcher:
         with self._lock:
             self._state.update(kw)
 
+    # --- эталоны ----------------------------------------------------------
+    def reload_templates(self):
+        """Перечитывает портреты с диска.
+
+        Нужно после докачки: распознаватель загружает эталоны при создании,
+        и без перечитывания слежение не заработало бы до перезапуска сервера.
+        """
+        self.recognizer = recognize.Recognizer(self.hero_names)
+        return self.recognizer.ready
+
+    def _download_templates(self):
+        """Качает недостающие портреты, показывая прогресс в состоянии."""
+        from vision import icons
+        if self.source is None:
+            self._set(last_error="нет источника данных для скачивания портретов")
+            return False
+
+        def progress(done, total):
+            self._set(mode=f"скачиваю портреты героев: {done} из {total}")
+
+        self._set(mode="скачиваю портреты героев…", last_error=None)
+        try:
+            icons.ensure_icons(self.source, progress)
+        except Exception as e:  # noqa: BLE001
+            self._set(last_error=f"не удалось скачать портреты: {e}")
+            return False
+        return self.reload_templates()
+
     # --- управление -------------------------------------------------------
     def start(self):
         if self._thread and self._thread.is_alive():
             return False
-        if not self.recognizer.ready:
-            self._set(last_error="нет эталонов героев — сначала скачайте портреты")
-            return False
         if not capture.available():
-            self._set(last_error="не установлен пакет mss — захват экрана недоступен")
+            self._set(last_error="не установлены пакеты для захвата экрана")
             return False
+
+        # эталонов может не быть: в репозиторий они не входят. Не ругаемся,
+        # а качаем сами — пользователю незачем знать про это устройство.
+        if not self.recognizer.ready:
+            self.reload_templates()
+
         self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         self._set(running=True, last_error=None)
         return True
+
+    def _run(self):
+        if not self.recognizer.ready and not self._download_templates():
+            self._set(running=False, mode="остановлено")
+            return
+        self._loop()
 
     def stop(self):
         self._stop.set()
@@ -75,6 +115,10 @@ class ScreenWatcher:
 
     def scan_once(self):
         """Разовый полный поиск — для кнопки «сканировать сейчас»."""
+        if not self.recognizer.ready:
+            self.reload_templates()
+        if not self.recognizer.ready and not self._download_templates():
+            return self.state()
         frame = capture.grab(self.monitor, self.region)
         hits, width = self.recognizer.scan(frame)
         self._apply(hits, width, mode="разовый поиск")

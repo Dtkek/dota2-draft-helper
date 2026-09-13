@@ -298,7 +298,9 @@ async function visionBoot() {
     const ic = st.icons;
     box.textContent = ic.ready
       ? `Готово. Эталонов героев: ${ic.have} из ${ic.total}.`
-      : `Не хватает портретов героев: ${ic.have} из ${ic.total}. Нажмите «Скачать портреты».`;
+      : `Портретов героев: ${ic.have} из ${ic.total}. Они скачаются сами при ` +
+        `первом запуске слежения — это займёт около минуты. Можно и заранее, ` +
+        `кнопкой «Скачать портреты».`;
   } catch (e) {
     showError(box, e);
   }
@@ -344,14 +346,19 @@ $('#vis-scan').addEventListener('click', async () => {
   } catch (e) { showError($('#vision-out'), e); }
 });
 
-$('#vis-icons').addEventListener('click', async () => {
-  $('#vision-status').textContent = 'Скачиваю портреты героев, это займёт минуту…';
+$('#vis-icons').addEventListener('click', async (e) => {
+  const btn = e.target;
+  btn.disabled = true;
+  $('#vision-status').textContent =
+    'Скачиваю портреты героев (127 штук), это займёт около минуты…';
   try {
     const r = await api('/api/vision/icons', { method: 'POST' });
     $('#vision-status').textContent =
       `Портретов на диске: ${r.have} из ${r.total}` +
-      (r.failed ? `, не удалось скачать: ${r.failed}` : '');
-  } catch (e) { showError($('#vision-status'), e); }
+      (r.failed ? `, не удалось скачать: ${r.failed}` : '') +
+      (r.ready ? '. Можно включать слежение.' : '');
+  } catch (err) { showError($('#vision-status'), err); }
+  btn.disabled = false;
 });
 
 async function pollVision() {
