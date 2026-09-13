@@ -7,17 +7,22 @@ rem То же, что в start.bat: без папки app рядом запус�
 if not exist "app\tools\diagnose.py" (
     echo.
     echo ================================================================
-    echo  Рядом с этим файлом нет папки "app" - значит, скачан только
-    echo  сам батник, а не проект целиком.
+    echo  Рядом с этим файлом нет папки "app" - значит, запущена копия
+    echo  батника в стороне от проекта.
     echo.
     echo  Текущая папка:
     echo    %CD%
     echo.
-    echo  Что делать:
-    echo   1. Открыть https://github.com/Dtkek/dota2-draft-helper
-    echo   2. Зелёная кнопка "Code" - "Download ZIP"
-    echo   3. РАСПАКОВАТЬ архив в обычную папку, например C:\dota-helper
-    echo   4. Запустить diagnose.bat уже из распакованной папки
+    set FOUND=
+    for %%R in ("%USERPROFILE%\Downloads" "%USERPROFILE%\Desktop" "%USERPROFILE%\Documents" "%USERPROFILE%\Downloads\Telegram Desktop") do (
+        for /d %%D in ("%%~R\*") do (
+            if exist "%%~D\app\tools\diagnose.py" echo  Проект найден здесь: %%~D
+        )
+    )
+    echo.
+    echo  Если проект ещё не скачан - возьмите ZIP:
+    echo   https://github.com/Dtkek/dota2-draft-helper
+    echo  и распакуйте, запускать прямо из архива нельзя.
     echo ================================================================
     echo.
     pause

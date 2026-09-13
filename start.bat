@@ -9,23 +9,46 @@ rem Без этой проверки Python падает с невразумит
 if not exist "app\server.py" (
     echo.
     echo ================================================================
-    echo  Рядом с этим файлом нет папки "app" - значит, скачан только
-    echo  сам батник, а не проект целиком.
+    echo  Рядом с этим файлом нет папки "app" - значит, запущена копия
+    echo  батника в стороне от проекта.
     echo.
     echo  Текущая папка:
     echo    %CD%
     echo.
-    echo  Что делать:
+    call :findproject
+    echo.
+    echo  Если проект ещё не скачан:
     echo   1. Открыть https://github.com/Dtkek/dota2-draft-helper
     echo   2. Зелёная кнопка "Code" - "Download ZIP"
-    echo   3. РАСПАКОВАТЬ архив в обычную папку, например C:\dota-helper
-    echo      (запускать прямо из архива нельзя)
-    echo   4. Запустить start.bat уже из распакованной папки
+    echo   3. РАСПАКОВАТЬ архив (запускать прямо из архива нельзя)
+    echo   4. Запустить start.bat из распакованной папки
     echo ================================================================
     echo.
     pause
     exit /b 1
 )
+goto :checked
+
+rem Ищем распакованный проект в обычных местах: людям проще, когда им
+rem показывают готовый путь, а не просят искать самим.
+:findproject
+set FOUND=
+for %%R in ("%USERPROFILE%\Downloads" "%USERPROFILE%\Desktop" "%USERPROFILE%\Documents" "%USERPROFILE%\Downloads\Telegram Desktop") do (
+    if exist "%%~R\app\server.py" call :report "%%~R"
+    for /d %%D in ("%%~R\*") do (
+        if exist "%%~D\app\server.py" call :report "%%~D"
+    )
+)
+if not defined FOUND echo  Найти проект в обычных папках не удалось.
+exit /b 0
+
+:report
+if not defined FOUND echo  Похоже, проект лежит здесь - запускайте start.bat оттуда:
+set FOUND=1
+echo    %~1
+exit /b 0
+
+:checked
 
 rem Ищем Python: сначала лаунчер py, потом python из PATH
 set PY=
