@@ -653,6 +653,44 @@ async function pollGsi() {
   } catch (e) { /* сервер занят - подождём */ }
 }
 
+$('#gsi-check').addEventListener('click', async () => {
+  const out = $('#gsi-check-out');
+  out.innerHTML = '<div class="loading">Проверяю…</div>';
+  try {
+    const c = await api('/api/gsi/check');
+    out.innerHTML = '';
+    const steps = [];
+    steps.push([!!c.dota_cfg_dir,
+      c.dota_cfg_dir ? `папка Dota найдена: ${c.dota_cfg_dir}`
+        : 'папка Dota не найдена в обычных местах Steam — скачайте конфиг и положите вручную']);
+    if (c.dota_cfg_dir) {
+      steps.push([c.config_present,
+        c.config_present ? `конфиг лежит: ${c.config_path}`
+          : 'конфига нет — нажмите «Подключить игру»']);
+      if (c.config_present) {
+        steps.push([c.config_port_ok,
+          c.config_port_ok ? 'в конфиге правильный адрес и порт'
+            : 'в конфиге другой порт — нажмите «Подключить игру» ещё раз']);
+      }
+    }
+    steps.push([c.received > 0,
+      c.received > 0
+        ? `игра прислала сообщений: ${c.received}` + (c.alive ? ' (сейчас на связи)' : ' (сейчас молчит)')
+        : 'от игры не пришло ни одного сообщения']);
+    steps.forEach(([ok, text]) => {
+      const row = el('div', ok ? 'pos' : 'neg', (ok ? '✓ ' : '✗ ') + text);
+      row.style.fontSize = '12px';
+      out.appendChild(row);
+    });
+    if (c.config_present && !c.received) {
+      out.appendChild(el('div', 'error',
+        'Конфиг на месте, но игра молчит. Почти наверняка не задан параметр запуска: ' +
+        'Steam → Dota 2 → Свойства → Параметры запуска → добавить -gamestateintegration, ' +
+        'затем перезапустить Dota. Сообщения идут даже из главного меню — ждать матча не нужно.'));
+    }
+  } catch (e) { showError(out, e); }
+});
+
 $('#gsi-install').addEventListener('click', async () => {
   const box = $('#gsi-status');
   box.textContent = 'ищу папку Dota…';

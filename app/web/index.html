@@ -132,13 +132,18 @@
             <div><label>Мой герой</label><select id="my-hero"><option value="">— не выбран —</option></select></div>
             <div><label>Игра сообщает</label><span id="gsi-status" class="dim">проверяю…</span></div>
             <button class="tab" id="gsi-install">Подключить игру</button>
+            <button class="tab" id="gsi-check">Проверить подключение</button>
             <a class="tab" id="gsi-download" href="/api/gsi/config" download>Скачать конфиг</a>
           </div>
           <div class="dim" style="margin:6px 0 8px">
-            «Подключить игру» кладёт в папку Dota конфиг Game State Integration — после
-            перезапуска игры она сама сообщает, за кого вы играете и за какую сторону.
-            Либо выберите героя руками или нажмите «это я» на распознанном союзнике.
+            Game State Integration — официальный механизм Valve: игра сама сообщает, за кого
+            вы играете и за какую сторону. Нужны два шага: «Подключить игру» кладёт конфиг
+            в папку Dota, а в Steam у Dota 2 должен стоять параметр запуска
+            <b>-gamestateintegration</b> (Steam → библиотека → Dota 2 → правый клик →
+            Свойства → Параметры запуска). Без параметра игра конфиг не читает.
+            Потом перезапустить Dota. Либо выберите героя руками или нажмите «это я».
           </div>
+          <div id="gsi-check-out"></div>
           <div id="build-out" class="empty-hint">Выберите своего героя — покажу стартовый закуп и порядок сборки из турнирных матчей.</div>
         </div>
 

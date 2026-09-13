@@ -143,6 +143,31 @@ def find_dota_cfg():
     return None
 
 
+def check(port):
+    """Что с подключением: где папка, лежит ли конфиг, тот ли в нём порт,
+    приходили ли сообщения. По этому списку видно, на каком шаге затык."""
+    cfg_dir = find_dota_cfg()
+    result = {
+        "dota_cfg_dir": cfg_dir,
+        "config_path": None,
+        "config_present": False,
+        "config_port_ok": False,
+        "steam_roots_checked": _steam_roots(),
+    }
+    if cfg_dir:
+        path = os.path.join(cfg_dir, "gamestate_integration", CFG_NAME)
+        result["config_path"] = path
+        if os.path.isfile(path):
+            result["config_present"] = True
+            try:
+                with open(path, encoding="utf-8", errors="ignore") as f:
+                    result["config_port_ok"] = f":{port}/gsi" in f.read()
+            except OSError:
+                pass
+    result.update(state())
+    return result
+
+
 def install(port):
     """Кладёт конфиг в папку игры. Возвращает (путь или None, сообщение)."""
     cfg_dir = find_dota_cfg()

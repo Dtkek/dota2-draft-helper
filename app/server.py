@@ -91,7 +91,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-13.24"
+VERSION = "2026-09-13.25"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -623,6 +623,8 @@ class Handler(BaseHTTPRequestHandler):
                     "<Steam>\\steamapps\\common\\dota 2 beta\\game\\dota\\cfg\\"
                     "gamestate_integration\\gamestate_integration_drafthelper.cfg")
                 return self._json(s)
+            if url.path == "/api/gsi/check":
+                return self._json(gsi.check(self.server.server_address[1]))
             if url.path == "/api/gsi/config":
                 body = gsi.config_text(self.server.server_address[1]).encode("utf-8")
                 self.send_response(200)
@@ -699,6 +701,11 @@ class Handler(BaseHTTPRequestHandler):
                     gsi.handle(json.loads(raw or b"{}"))
                 except ValueError:
                     pass
+                # первые сообщения - в консоль: так видно, что игра вообще пишет
+                n = gsi.state()["received"]
+                if n <= 3 or n % 100 == 0:
+                    sys.stderr.write(f"  GSI: сообщение #{n} от игры, {len(raw)} байт\n")
+                    sys.stderr.flush()
                 self.send_response(200)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
