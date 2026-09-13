@@ -92,36 +92,66 @@ def tcp(host, port=443):
     return fn
 
 
-def https_urllib(url):
+def https_urllib(url, gzip_on=True):
+    """Скачивает ответ ЦЕЛИКОМ.
+
+    Читать кусочек нельзя: именно так первая версия этой проверки и
+    ошиблась. Она брала 2000 байт, соединение успевало их отдать, проверка
+    проходила — а приложение потом висело на полном ответе в 161 КБ,
+    который на том же канале обрывался на середине.
+    """
     def fn():
-        req = urllib.request.Request(url, headers={"User-Agent": "draft-helper-diag"})
+        headers = {"User-Agent": "draft-helper-diag"}
+        if gzip_on:
+            headers["Accept-Encoding"] = "gzip"
+        req = urllib.request.Request(url, headers=headers)
         ctx = ssl.create_default_context()
         with urllib.request.urlopen(req, timeout=TIMEOUT, context=ctx) as r:
-            data = r.read(2000)
-        return f"HTTP {r.status}, получено {len(data)} байт"
+            data = r.read()
+            enc = r.headers.get("Content-Encoding") or "нет"
+        kb = len(data) / 1024
+        return f"HTTP {r.status}, скачано {kb:.0f} КБ, сжатие: {enc}"
     return fn
 
 
-def https_curl(url):
+def https_curl(url, compressed=True):
     def fn():
         if not CURL:
             raise RuntimeError("curl не установлен")
-        out = subprocess.run(
-            ["curl", "-sS", "-o", os.devnull, "-w", "%{http_code}",
-             "--max-time", str(TIMEOUT), url],
-            capture_output=True, text=True, timeout=TIMEOUT + 10)
+        cmd = ["curl", "-sS"]
+        if compressed:
+            cmd.append("--compressed")
+        # -o и его значение обязаны идти подряд: вставка флага между ними
+        # отправляла тело ответа в stdout и ломала разбор результата
+        cmd += ["-o", os.devnull, "-w", "%{http_code} %{size_download}",
+                "--max-time", str(TIMEOUT), url]
+        out = subprocess.run(cmd, capture_output=True, text=True,
+                             timeout=TIMEOUT + 10)
         if out.returncode != 0:
             raise RuntimeError(out.stderr.strip()[:200] or f"код {out.returncode}")
-        return f"HTTP {out.stdout.strip()}"
+        code, size = (out.stdout.strip().split() + ["?"])[:2]
+        return f"HTTP {code}, скачано {int(size) / 1024:.0f} КБ"
     return fn
 
 
+HEAVY = "https://api.opendota.com/api/heroStats"  # 161 КБ, 33 КБ со сжатием
+
 check("DNS api.opendota.com", dns("api.opendota.com"))
 check("TCP api.opendota.com:443", tcp("api.opendota.com"))
-urllib_ok = check("HTTPS через urllib (основной путь)",
-                  https_urllib("https://api.opendota.com/api/heroes"))
-curl_ok = check("HTTPS через curl (запасной путь)",
-                https_curl("https://api.opendota.com/api/heroes"))
+
+# Именно этот запрос делает приложение при запуске, и именно он самый
+# тяжёлый. Проверяем оба пути и со сжатием, и без: если без сжатия рвётся,
+# а со сжатием проходит — значит канал не тянет большие ответы.
+gzip_urllib = check("Справочник героев через urllib, со сжатием (33 КБ)",
+                    https_urllib(HEAVY, gzip_on=True))
+plain_urllib = check("Справочник героев через urllib, без сжатия (161 КБ)",
+                     https_urllib(HEAVY, gzip_on=False))
+gzip_curl = check("Справочник героев через curl, со сжатием",
+                  https_curl(HEAVY, compressed=True))
+plain_curl = check("Справочник героев через curl, без сжатия",
+                   https_curl(HEAVY, compressed=False))
+urllib_ok, curl_ok = gzip_urllib, gzip_curl
+
 check("CDN портретов героев",
       https_curl("https://cdn.cloudflare.steamstatic.com/apps/dota2/images/"
                  "dota_react/heroes/antimage.png") if CURL
@@ -192,8 +222,18 @@ else:
     if "HTTPS через urllib (основной путь)" in problems and curl_ok:
         print("\nurllib не работает, а curl работает — приложение переключится")
         print("на curl само, это не смертельно.")
-    if not urllib_ok and not curl_ok:
+    any_gzip = gzip_urllib or gzip_curl
+    any_plain = plain_urllib or plain_curl
+    if any_gzip and not any_plain:
+        print("\nГЛАВНОЕ: сжатые ответы доходят, несжатые — нет.")
+        print("Канал не вытягивает большие ответы: 161 КБ рвётся, 33 КБ проходят.")
+        print("Приложение запрашивает сжатие, так что работать должно.")
+    elif any_gzip or any_plain:
+        print("\nДоступ к api.opendota.com есть хотя бы одним способом —")
+        print("приложение выберет рабочий путь само.")
+    if not any_gzip and not any_plain:
         print("\nГЛАВНОЕ: доступа к api.opendota.com нет ни одним способом.")
-        print("Приложение без него работать не может: оттуда берутся все данные.")
+        print("Приложение поднимется на локальном снимке справочника,")
+        print("но подбор по матчапам работать не будет: для него нужна сеть.")
         print("Проверьте VPN, брандмауэр и блокировки провайдера.")
 print("=" * 62)

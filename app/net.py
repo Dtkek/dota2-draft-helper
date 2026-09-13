@@ -5,6 +5,7 @@
 запрос сначала пробуется через urllib, а при ошибке SSL — через curl.
 Кэш нужен, чтобы не упираться в лимит OpenDota (60 запросов в минуту).
 """
+import gzip
 import hashlib
 import json
 import os
@@ -60,14 +61,24 @@ def _write_cache(url, data):
 
 
 def _fetch_urllib(url, timeout):
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    # Сжатие обязательно: heroStats весит 161 КБ, а со сжатием 33 КБ.
+    # На нестабильных каналах большой ответ просто не доходит — соединение
+    # рвётся на середине, и приложение выглядит зависшим.
+    req = urllib.request.Request(url, headers={
+        "User-Agent": UA,
+        "Accept-Encoding": "gzip",
+    })
     with urllib.request.urlopen(req, timeout=timeout, context=_context()) as r:
-        return json.loads(r.read().decode("utf-8"))
+        raw = r.read()
+        if r.headers.get("Content-Encoding") == "gzip":
+            raw = gzip.decompress(raw)
+    return json.loads(raw.decode("utf-8"))
 
 
 def _fetch_curl(url, timeout):
     out = subprocess.run(
-        ["curl", "-sS", "-L", "--max-time", str(timeout), "-H", f"User-Agent: {UA}", url],
+        ["curl", "-sS", "-L", "--compressed", "--max-time", str(timeout),
+         "-H", f"User-Agent: {UA}", url],
         capture_output=True, text=True,
     )
     if out.returncode != 0:

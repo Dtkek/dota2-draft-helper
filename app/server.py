@@ -303,12 +303,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._file(os.path.join(WEB_DIR, name))
 
             if url.path == "/api/heroes":
+                heroes = hero_list(src)
+                stale = getattr(src, "using_fallback", False)
                 return self._json({
-                    "heroes": hero_list(src),
+                    "heroes": heroes,
                     "brackets": src.available_brackets(),
                     "positions": [{"key": k, "label": v}
                                   for k, v in POSITION_LABELS],
                     "source": src.name,
+                    "offline": stale,
+                    "offline_note": (
+                        "Нет связи с OpenDota — работаю на локальном снимке "
+                        "справочника героев. Подбор по матчапам будет "
+                        "недоступен: для него нужны свежие данные."
+                    ) if stale else None,
                 })
             if url.path == "/api/meta":
                 bracket, note = resolve_bracket(src, q.get("bracket", ["all"])[0])

@@ -96,7 +96,13 @@ async function boot() {
     state.heroes = data.heroes;
     state.byId = new Map(data.heroes.map((h) => [h.id, h]));
     state.brackets = data.brackets;
-    $('#src-label').textContent = 'источник: ' + data.source;
+    $('#src-label').textContent = data.offline
+      ? 'источник: локальный снимок'
+      : 'источник: ' + data.source;
+    if (data.offline_note) {
+      const warn = el('div', 'error', data.offline_note);
+      $('#rec-out').parentNode.insertBefore(warn, $('#rec-out'));
+    }
 
     const roles = new Set();
     data.heroes.forEach((h) => h.roles.forEach((r) => roles.add(r)));
