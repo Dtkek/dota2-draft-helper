@@ -77,7 +77,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-13.14"
+VERSION = "2026-09-13.16"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -407,7 +407,17 @@ class Handler(BaseHTTPRequestHandler):
         src = get_source()
         try:
             length = int(self.headers.get("Content-Length") or 0)
-            data = json.loads(self.rfile.read(length) or b"{}")
+            raw = self.rfile.read(length)
+
+            # изображение приходит сырыми байтами, а не JSON
+            if url.path == "/api/vision/recognize":
+                if not vision.AVAILABLE:
+                    return self._json({"error": vision.requirements_hint()}, 400)
+                if not raw:
+                    return self._json({"error": "файл пустой"}, 400)
+                return self._json(get_watcher().scan_image(raw))
+
+            data = json.loads(raw or b"{}")
 
             if url.path == "/api/recommend":
                 enemy = data.get("enemy") or []

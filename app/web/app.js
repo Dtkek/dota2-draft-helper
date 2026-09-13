@@ -15,12 +15,33 @@ window.addEventListener('error', (ev) => {
 });
 
 // ---------------------------------------------------------------- состояние
+// Герои, которых пользователь не играет: их не предлагаем никогда.
+// Список живёт в localStorage; по умолчанию — Wraith King, по просьбе владельца.
+const NEVER_DEFAULT = [42];
+const NEVER_KEY = 'draft-helper.never';
+
+function loadNever() {
+  try {
+    const raw = localStorage.getItem(NEVER_KEY);
+    if (raw === null) return NEVER_DEFAULT.slice();
+    const list = JSON.parse(raw);
+    return Array.isArray(list) ? list.map(Number).filter(Number.isFinite) : [];
+  } catch (e) {
+    return NEVER_DEFAULT.slice();
+  }
+}
+
+function saveNever() {
+  try { localStorage.setItem(NEVER_KEY, JSON.stringify(state.draft.never)); }
+  catch (e) { /* приватный режим — просто не сохранится */ }
+}
+
 const state = {
   heroes: [],
   byId: new Map(),
   brackets: [],
   roles: [],
-  draft: { enemy: [], ally: [], banned: [] },
+  draft: { enemy: [], ally: [], banned: [], never: loadNever() },
   mode: 'enemy',
   search: '',
 };
@@ -199,6 +220,8 @@ $('#hero-search').addEventListener('input', (e) => {
   renderHeroGrid();
 });
 
+// Занятые в текущем драфте. Список «не предлагать» сюда не входит:
+// врага Wraith King нужно засчитать во враги, даже если сами мы его не играем.
 function usedIds() {
   const d = state.draft;
   return new Set([...d.enemy, ...d.ally, ...d.banned]);
@@ -226,9 +249,14 @@ function renderHeroGrid() {
 
 function addHero(id) {
   const list = state.draft[state.mode];
-  const cap = state.mode === 'banned' ? 14 : 5;
-  if (list.length >= cap || usedIds().has(id)) return;
+  const caps = { enemy: 5, ally: 5, banned: 14, never: 127 };
+  if (list.length >= caps[state.mode]) return;
+  // в драфте герой может быть только в одном списке; «не предлагать» —
+  // отдельный список, туда можно добавить кого угодно, лишь бы не дважды
+  const taken = state.mode === 'never' ? new Set(list) : usedIds();
+  if (taken.has(id)) return;
   list.push(id);
+  if (state.mode === 'never') saveNever();
   renderSlots();
   renderHeroGrid();
   refreshRecommendations();
@@ -236,13 +264,15 @@ function addHero(id) {
 
 function removeHero(kind, id) {
   state.draft[kind] = state.draft[kind].filter((x) => x !== id);
+  if (kind === 'never') saveNever();
   renderSlots();
   renderHeroGrid();
   refreshRecommendations();
 }
 
 function renderSlots() {
-  [['enemy', '#slots-enemy'], ['ally', '#slots-ally'], ['banned', '#slots-banned']]
+  [['enemy', '#slots-enemy'], ['ally', '#slots-ally'],
+   ['banned', '#slots-banned'], ['never', '#slots-never']]
     .forEach(([kind, sel]) => {
       const box = $(sel);
       box.innerHTML = '';
@@ -285,7 +315,8 @@ async function refreshRecommendations() {
       body: JSON.stringify({
         enemy: state.draft.enemy,
         ally: state.draft.ally,
-        banned: state.draft.banned,
+        // «не предлагать» для сервера — те же баны: их просто нет в выдаче
+        banned: state.draft.banned.concat(state.draft.never),
         bracket: $('#bracket').value,
         position: $('#position').value,
         limit: Number($('#limit').value),
@@ -455,6 +486,25 @@ $('#vis-scan').addEventListener('click', async () => {
     out.innerHTML = '<div class="loading">Ищу героев на экране…</div>';
     renderVision(await api('/api/vision/scan', { method: 'POST' }));
   } catch (e) { showError(out, e); }
+});
+
+// Проверка на файле: отделяет «не захватывает экран» от «не распознаёт».
+$('#vis-file').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const out = $('#vision-out');
+  out.innerHTML = `<div class="loading">Распознаю ${file.name}…</div>`;
+  try {
+    const res = await fetch('/api/vision/recognize', {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    renderVision(data);
+  } catch (err) { showError(out, err); }
+  e.target.value = '';
 });
 
 function showFrame() {

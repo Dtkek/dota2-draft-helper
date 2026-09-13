@@ -154,6 +154,38 @@ class ScreenWatcher:
         # настройки поменялись — прежние прямоугольники больше не годятся
         self._set(boxes=[], template_width=None)
 
+    def scan_image(self, image_bytes):
+        """Распознаёт героев на присланном изображении, минуя захват экрана.
+
+        Нужно, чтобы отделить «не захватывает» от «не распознаёт»:
+        если на скриншоте герои находятся, а вживую нет — виноват захват.
+        """
+        import cv2
+        import numpy as np
+        if not self.recognizer.ready:
+            self.reload_templates()
+        if not self.recognizer.ready and not self._download_templates():
+            return self.state()
+        arr = np.frombuffer(image_bytes, dtype=np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame is None:
+            self._set(last_error="не удалось прочитать изображение")
+            return self.state()
+        h, w = frame.shape[:2]
+        k = min(1.0, 640 / w)
+        small = cv2.resize(frame, (int(w * k), int(h * k)),
+                           interpolation=cv2.INTER_AREA) if k < 1 else frame
+        ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        with self._lock:
+            if ok:
+                self._last_jpeg = buf.tobytes()
+            self._state["frame_brightness"] = round(float(frame.mean()), 1)
+            self._state["frame_hint"] = None
+        hits, width = self.recognizer.scan(frame)
+        self._apply(hits, width, mode=f"проверка на файле {w}×{h}")
+        self._set(last_error=None)
+        return self.state()
+
     def scan_once(self):
         """Разовый полный поиск — для кнопки «сканировать сейчас»."""
         if not self.recognizer.ready:

@@ -37,6 +37,7 @@
             <button data-mode="enemy" class="active">Враги</button>
             <button data-mode="ally">Свои</button>
             <button data-mode="banned">Баны</button>
+            <button data-mode="never">Не предлагать</button>
           </div>
           <div style="margin-bottom:10px">
             <label>Враги</label>
@@ -46,9 +47,13 @@
             <label>Свои</label>
             <div class="slots" id="slots-ally"></div>
           </div>
-          <div>
+          <div style="margin-bottom:10px">
             <label>Баны</label>
             <div class="slots" id="slots-banned"></div>
+          </div>
+          <div>
+            <label>Не предлагать — герои, которых вы не играете; список сохраняется</label>
+            <div class="slots" id="slots-never"></div>
           </div>
         </div>
 
@@ -92,6 +97,8 @@
               <button id="vis-stop">Остановить</button>
               <button id="vis-scan">Сканировать</button>
               <button id="vis-icons">Скачать портреты</button>
+              <label class="tab" for="vis-file" style="cursor:pointer">Проверить на скриншоте</label>
+              <input type="file" id="vis-file" accept="image/*" hidden>
             </div>
             <div class="dim" style="margin-bottom:8px">
               Задержка нужна, чтобы после нажатия успеть переключиться в игру:
