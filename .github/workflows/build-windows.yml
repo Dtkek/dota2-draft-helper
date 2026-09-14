@@ -52,14 +52,20 @@ jobs:
 
       - name: Проверка запуска
         # exe должен подняться и ответить по HTTP, иначе сборка бесполезна.
-        # Запускается как у пользователя: с окном (не --no-browser) и из
-        # папки с кириллицей в пути - на «Рабочий стол» pythonnet падал,
-        # и это должно ловиться здесь, а не на его машине. Вывод exe
-        # печатается целиком; откат окна в браузер считается провалом.
+        # Запускается как у пользователя: с окном (не --no-browser), из
+        # папки с кириллицей в пути и с меткой «скачано из интернета» на
+        # файлах - и то, и другое ломало окно, и ловиться это должно
+        # здесь, а не на его машине. Вывод exe печатается целиком;
+        # откат окна в браузер считается провалом.
         shell: pwsh
         run: |
           $dir = Join-Path $env:RUNNER_TEMP "Рабочий стол\dota2-draft-helper"
           Copy-Item -Recurse dist\dota2-draft-helper $dir
+          # ровно то, что делает проводник с файлами из скачанного архива:
+          # без этого проверка гоняла «чистую» сборку и проблему не видела
+          Get-ChildItem $dir -Recurse -File | ForEach-Object {
+            Set-Content -Path $_.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
+          }
           $p = Start-Process -FilePath (Join-Path $dir "dota2-draft-helper.exe") -ArgumentList "--port","8791" -PassThru -RedirectStandardOutput run.log -RedirectStandardError run.err
           Start-Sleep -Seconds 15
           try {

@@ -213,6 +213,66 @@ def port_free():
 
 check("порт 8777", port_free)
 
+# --- 6. собственное окно --------------------------------------------------
+# Всё, без чего окно не открывается и приложение уходит в браузер. Окно -
+# удобство, а не функция, поэтому здесь только предупреждения.
+print("\n6. Собственное окно")
+
+try:
+    import webview  # noqa: F401
+    say(OK, "пакет pywebview — есть")
+except ImportError:
+    say(WARN, "пакет pywebview — нет (приложение откроется в браузере)")
+
+if sys.platform == "win32":
+    import winreg
+
+    def reg_value(path, name):
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path) as k:
+            return winreg.QueryValueEx(k, name)[0]
+
+    def dotnet():
+        rel = reg_value(r"SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full",
+                        "Release")
+        if rel < 461808:  # 4.7.2
+            raise RuntimeError(f"Release {rel} — нужен .NET Framework 4.7.2 или новее")
+        return f"Release {rel}"
+
+    def webview2():
+        return "версия " + reg_value(
+            r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients"
+            r"\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}", "pv")
+
+    def marked_files():
+        """Метка «скачано из интернета»: из-за неё .NET не грузит сборки.
+
+        Приложение снимает её само при запуске, но если папка только для
+        чтения — снять не выйдет, и окно не откроется.
+        """
+        root = getattr(sys, "_MEIPASS", None) or APP
+        n = 0
+        for base, _dirs, files in os.walk(root):
+            for name in files:
+                try:
+                    with open(os.path.join(base, name) + ":Zone.Identifier", "rb"):
+                        n += 1
+                except OSError:
+                    pass
+        if n:
+            raise RuntimeError(
+                f"помечено файлов: {n} — .NET откажется грузить "
+                "Python.Runtime.dll. Снять вручную: в папке приложения "
+                "Get-ChildItem -Recurse | Unblock-File")
+        return "меток нет"
+
+    check(".NET Framework", dotnet)
+    check("WebView2 Runtime", webview2)
+    check("метка «скачано из интернета»", marked_files)
+    ascii_path = sys.executable.isascii()
+    say(OK if ascii_path else WARN,
+        "путь к приложению без кириллицы" if ascii_path
+        else f"в пути есть кириллица: {sys.executable}")
+
 # --- итог -----------------------------------------------------------------
 print("\n" + "=" * 62)
 if not problems:
