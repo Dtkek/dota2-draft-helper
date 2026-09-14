@@ -52,12 +52,15 @@ jobs:
 
       - name: Проверка запуска
         # exe должен подняться и ответить по HTTP, иначе сборка бесполезна.
-        # Запускается как у пользователя - с окном, а не с --no-browser:
-        # так падение pywebview внутри exe видно здесь, а не на его машине.
-        # Вывод пишется в файл и печатается целиком.
+        # Запускается как у пользователя: с окном (не --no-browser) и из
+        # папки с кириллицей в пути - на «Рабочий стол» pythonnet падал,
+        # и это должно ловиться здесь, а не на его машине. Вывод exe
+        # печатается целиком; откат окна в браузер считается провалом.
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath "dist\dota2-draft-helper\dota2-draft-helper.exe" -ArgumentList "--port","8791" -PassThru -RedirectStandardOutput run.log -RedirectStandardError run.err
+          $dir = Join-Path $env:RUNNER_TEMP "Рабочий стол\dota2-draft-helper"
+          Copy-Item -Recurse dist\dota2-draft-helper $dir
+          $p = Start-Process -FilePath (Join-Path $dir "dota2-draft-helper.exe") -ArgumentList "--port","8791" -PassThru -RedirectStandardOutput run.log -RedirectStandardError run.err
           Start-Sleep -Seconds 15
           try {
             if ($p.HasExited) { throw "exe завершился с кодом $($p.ExitCode) до проверки" }
@@ -72,7 +75,7 @@ jobs:
             Write-Host "--- stderr:"; Get-Content run.err -ErrorAction SilentlyContinue
           }
           $log = (Get-Content run.log -Raw -ErrorAction SilentlyContinue) + (Get-Content run.err -Raw -ErrorAction SilentlyContinue)
-          if ($log -match "окно не открылось") { Write-Warning "окно pywebview на раннере не открылось, сработал откат в браузер" }
+          if ($log -match "окно не открылось") { throw "окно pywebview не открылось, сработал откат в браузер - см. вывод выше" }
 
       - name: Архив
         shell: pwsh
