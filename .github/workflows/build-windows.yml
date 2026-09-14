@@ -70,8 +70,11 @@ jobs:
           Get-ChildItem $dir -Recurse -File | ForEach-Object {
             Set-Content -Path $_.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
           }
-          # exe без консоли пишет вывод сам - в dota2-draft-helper.log рядом с собой
-          $p = Start-Process -FilePath (Join-Path $dir "dota2-draft-helper.exe") -ArgumentList "--port","8791" -PassThru
+          # exe без консоли пишет вывод сам - в dota2-draft-helper.log рядом с собой.
+          # -NoNewWindow: запуск через CreateProcess, а не ShellExecute - иначе
+          # на помеченном exe всплывает предупреждение SmartScreen, на раннере
+          # его некому нажать, и запуск отменяется («canceled by the user»)
+          $p = Start-Process -FilePath (Join-Path $dir "dota2-draft-helper.exe") -ArgumentList "--port","8791" -PassThru -NoNewWindow
           Start-Sleep -Seconds 15
           try {
             if ($p.HasExited) { throw "exe завершился с кодом $($p.ExitCode) до проверки" }
