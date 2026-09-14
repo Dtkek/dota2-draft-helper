@@ -11,6 +11,7 @@ import json
 import os
 import ssl
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -18,6 +19,11 @@ import urllib.request
 
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
 UA = "pickline/1.0 (personal use)"
+
+# Дочерний curl на Windows без этого флага открывает себе чёрное окно
+# консоли, когда сам exe собран без консоли: у пользователя на каждый
+# запрос выскакивал «пустой PowerShell» на долю секунды
+SUBPROCESS_FLAGS = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
 
 _ssl_context = None
 _use_curl = False
@@ -118,7 +124,7 @@ def _fetch_curl(url, timeout):
         ["curl", "-sS", "-L", "-f", "--compressed", "--max-time", str(timeout),
          "-w", "\n%{http_code}",
          "-H", f"User-Agent: {UA}", url],
-        capture_output=True, text=True,
+        capture_output=True, text=True, **SUBPROCESS_FLAGS,
     )
     body, _, code = out.stdout.rpartition("\n")
     if out.returncode == 22 and code.strip().isdigit():
@@ -153,7 +159,11 @@ def get_json(url, ttl=3600, timeout=45, stale_ok=True):
                 _use_curl = fetch is _fetch_curl
                 _write_cache(url, data)
                 return data
-            except Exception as e:  # noqa: BLE001 — нужен любой сбой, чтобы попробовать запасной путь
+            except HttpStatusError as e:
+                # сервер ответил - вторым способом ответ будет тот же
+                error = e
+                break
+            except Exception as e:  # noqa: BLE001 — сбой соединения: пробуем запасной путь
                 error = e
         if not (isinstance(error, HttpStatusError) and error.code in RETRY_CODES):
             break
@@ -279,7 +289,7 @@ def _download_curl(url, tmp, timeout):
     out = subprocess.run(
         ["curl", "-sS", "-L", "--max-time", str(timeout),
          "-H", f"User-Agent: {UA}", "-o", tmp, url],
-        capture_output=True, text=True,
+        capture_output=True, text=True, **SUBPROCESS_FLAGS,
     )
     if out.returncode != 0:
         raise RuntimeError(f"curl: {out.stderr.strip()[:160] or 'код ' + str(out.returncode)}")

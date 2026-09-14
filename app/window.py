@@ -7,8 +7,8 @@
 пользователь его не видит: запустил exe - открылось окно.
 
 Зачем это, кроме удобства: окно можно держать поверх Dota в оконном
-режиме без alt-tab - переключатель «Поверх окон» в шапке страницы.
-Это ближе всего к оверлею и при этом ничего не делает с процессом игры.
+режиме без alt-tab - ключ запуска --on-top. Это ближе всего к оверлею
+и при этом ничего не делает с процессом игры.
 
 Без pywebview приложение работает как раньше - через браузер.
 """
@@ -26,26 +26,6 @@ except ImportError:  # pragma: no cover - без пакета просто бр�
 
 def requirements_hint():
     return "нет пакета pywebview: pip install pywebview"
-
-
-class Api:
-    """Методы, доступные странице как window.pywebview.api.*
-
-    Атрибут окна - с подчёркиванием: pywebview отдаёт странице все публичные
-    атрибуты и пытался сериализовать само окно вместе с его native-объектом.
-    """
-
-    def __init__(self):
-        self._window = None
-
-    def set_on_top(self, flag):
-        """Держать окно поверх остальных (для драфта поверх игры)."""
-        if self._window is not None:
-            self._window.on_top = bool(flag)
-        return bool(flag)
-
-    def get_on_top(self):
-        return bool(self._window.on_top) if self._window is not None else False
 
 
 def _unblock_tree(root):
@@ -139,13 +119,14 @@ def run(url, title="Pickline", on_top=False, on_closed=None, log=None):
     """Открывает окно и блокирует до его закрытия. Только из главного потока:
     на macOS WebKit иначе не работает."""
     _dotnet_runtime_workaround(log)
-    api = Api()
+    # «Поверх окон» только ключом запуска --on-top: переключение из страницы
+    # на ходу (window.on_top из js_api) на Windows вешало приложение -
+    # вызов уходит в поток окна, который в этот момент ждёт ответа страницы
     win = webview.create_window(
-        title, url, js_api=api,
+        title, url,
         width=1320, height=900, min_size=(760, 520), on_top=on_top,
         text_select=True,
     )
-    api._window = win
     if on_closed is not None:
         win.events.closed += on_closed
     webview.start()
