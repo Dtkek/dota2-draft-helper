@@ -1390,14 +1390,49 @@ function renderTournaments() {
 
 // ---------------------------------------------------------------- про-матчи
 let proLoaded = false;
-async function loadProList() {
-  if (proLoaded) return;
+// список про-матчей перечитывается не чаще раза в 10 минут (столько живёт
+// кэш на сервере), но и не реже: раньше он грузился один раз за сессию, и
+// открытое окно сутками показывало один и тот же список
+const PRO_LIST_TTL_MS = 10 * 60 * 1000;
+let proLoadedAt = 0;
+
+function freshnessLine(f) {
+  // честно про возраст данных: пользователь должен видеть, что смотрит
+  // на вчерашнюю копию, если OpenDota не отвечает
+  const line = el('div', f && f.error ? 'error' : 'dim');
+  line.style.margin = '0 0 6px';
+  if (!f || f.updated_at === null || f.updated_at === undefined) {
+    line.textContent = 'данные ещё не загружались';
+    return line;
+  }
+  const min = Math.round((f.age || 0) / 60);
+  const age = min < 1 ? 'только что' : min < 60 ? `${min} мин назад`
+    : min < 48 * 60 ? `${Math.round(min / 60)} ч назад` : `${Math.round(min / 1440)} дн назад`;
+  line.textContent = f.error
+    ? `Свежий список получить не удалось (${f.error}). Показана копия: обновлена ${age}.`
+    : `Обновлено ${age}.`;
+  return line;
+}
+
+async function loadProList(force) {
+  if (!force && proLoadedAt && Date.now() - proLoadedAt < PRO_LIST_TTL_MS) return;
   const out = $('#pro-list');
   try {
     const data = await api('/api/pro/matches');
+    proLoadedAt = Date.now();
     proLoaded = true;
     out.className = 'scroll';
     out.innerHTML = '';
+    const head = el('div');
+    head.style.display = 'flex';
+    head.style.gap = '8px';
+    head.style.alignItems = 'baseline';
+    head.appendChild(freshnessLine(data.freshness));
+    const refresh = el('button', 'tab', 'Обновить');
+    refresh.style.marginLeft = 'auto';
+    refresh.addEventListener('click', () => loadProList(true));
+    head.appendChild(refresh);
+    out.appendChild(head);
     data.matches.forEach((m) => {
       const card = el('div', 'match');
       const teams = el('div', 'teams');
@@ -1538,6 +1573,22 @@ function buildItem(it, badge) {
   card.title = `${it.dname}${it.cost ? ` — ${it.cost} зол.` : ''}: куплен в ${it.share}% игр` +
     (it.winrate !== null && it.winrate !== undefined ? `, винрейт с ним ${it.winrate}%` : '') +
     (badge ? `, ${badge.startsWith('×') ? badge.slice(1) + ' шт.' : 'медианная минута ' + badge}` : '');
+  // взаимоисключающие предметы (ботинки, апгрейды блинка): в сборке один,
+  // остальные - «или …» под ним, чтобы два вида ботинок не читались как оба
+  if (it.alternatives && it.alternatives.length) {
+    const alt = el('div', 'build-alt');
+    alt.appendChild(el('span', 'dim', 'или'));
+    it.alternatives.forEach((a) => {
+      const chip = el('span', 'build-alt-item');
+      chip.appendChild(itemIcon(a));
+      chip.appendChild(el('span', 'dim', `${a.share}%`));
+      chip.title = `${a.dname}: вместо этого в ${a.share}% игр` +
+        (a.winrate !== null && a.winrate !== undefined ? `, винрейт ${a.winrate}%` : '');
+      alt.appendChild(chip);
+    });
+    card.appendChild(alt);
+    card.title += '; или ' + it.alternatives.map((a) => `${a.dname} (${a.share}%)`).join(', ');
+  }
   return card;
 }
 

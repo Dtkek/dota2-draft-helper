@@ -212,6 +212,10 @@ class OpenDotaSource(HeroSource):
     def pro_matches(self):
         return get_json(f"{API}/proMatches", ttl=TTL_PRO_LIST)
 
+    def pro_matches_status(self):
+        """Когда список обновлялся и почему не обновился, если не обновился."""
+        return net.status(f"{API}/proMatches")
+
     # --- турнирная статистика ------------------------------------------
     # Поля pro_pick/pro_win в heroStats почти пустые, поэтому турнирная
     # статистика считается напрямую по базе матчей через /explorer:

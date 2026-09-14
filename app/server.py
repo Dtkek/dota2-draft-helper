@@ -118,7 +118,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-14.12"
+VERSION = "2026-09-14.13"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -485,6 +485,38 @@ def player_summary(source, account_id):
 # а условную - только как подсказку о сдвигах
 MIN_VS_GAMES = 15
 
+# Предметы, из которых в одной игре берут один: сборка считается по каждому
+# предмету независимо («в скольких играх куплен»), и без этого в неё
+# попадали сразу Power Treads и Arcane Boots - оба выше порога, потому что
+# в разных играх берут разные. В сборке остаётся самый частый из группы,
+# остальные показываются как альтернативы. Поздние апгрейды (Travel,
+# Greaves, Bearing) - отдельные шаги, а не альтернативы: их берут поверх.
+EXCLUSIVE_GROUPS = [
+    {"power_treads", "phase_boots", "arcane_boots", "tranquil_boots"},
+    {"overwhelming_blink", "swift_blink", "arcane_blink"},
+]
+
+
+def _collapse_alternatives(order, situational):
+    """Схлопывает взаимоисключающие предметы: один в сборке, остальные - в нём.
+
+    Победитель - самый частый в группе среди попавших в сборку (order);
+    остальные члены группы и из сборки, и из ситуативных уходят к нему в
+    alternatives. Если в сборке никого из группы нет, ситуативные не трогаем.
+    """
+    for group in EXCLUSIVE_GROUPS:
+        in_order = [e for e in order if e["key"] in group]
+        if not in_order:
+            continue
+        winner = max(in_order, key=lambda e: e["share"])
+        losers = [e for e in in_order if e is not winner] + [e for e in situational if e["key"] in group]
+        losers.sort(key=lambda e: -e["share"])
+        winner["alternatives"] = [
+            {k: e[k] for k in ("key", "dname", "img", "share", "winrate", "minute_f")}
+            for e in losers]
+        order[:] = [e for e in order if e is winner or e["key"] not in group]
+        situational[:] = [e for e in situational if e["key"] not in group]
+
 
 def _build_from_rows(source, purchases, final, items, by_id):
     """Разбирает строки из базы в стартовый закуп, порядок, ситуативные, итог."""
@@ -539,6 +571,7 @@ def _build_from_rows(source, purchases, final, items, by_id):
     start.sort(key=lambda x: -x["share"])
     order.sort(key=lambda x: x["minute"])
     situational.sort(key=lambda x: -x["share"])
+    _collapse_alternatives(order, situational)
 
     final_items = []
     for r in final:
@@ -558,6 +591,10 @@ def _build_from_rows(source, purchases, final, items, by_id):
     # итог - в порядке покупки, а не по частоте: собранные без рецепта
     # предметы в закупах не встречаются, у них минуты нет - они в конце
     final_items.sort(key=lambda x: (x["minute"] is None, x["minute"] or 0, -x["share"]))
+    # в итоговом инвентаре те же альтернативы: два вида ботинок сразу не носят
+    for e in final_items:
+        e.setdefault("minute_f", None)
+    _collapse_alternatives(final_items, [])
 
     return {
         "games": total, "wins": wins,
@@ -895,7 +932,11 @@ class Handler(BaseHTTPRequestHandler):
                     "note": note,
                 })
             if url.path == "/api/pro/matches":
-                return self._json({"matches": pro_matches(src)})
+                matches = pro_matches(src)
+                # свежесть - после запроса: если OpenDota не ответила, здесь
+                # будет причина, а список - последняя удачная копия
+                return self._json({"matches": matches,
+                                   "freshness": src.pro_matches_status()})
             if url.path == "/api/tournaments":
                 months = int((q.get("months") or ["3"])[0])
                 tier = (q.get("tier") or ["top"])[0]

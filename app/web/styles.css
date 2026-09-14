@@ -205,6 +205,15 @@ tbody tr:hover { background: var(--panel-2); }
 }
 .build-stat .pos { color: var(--good); }
 .build-stat .neg { color: var(--bad); }
+/* альтернативы предмета («или Arcane Boots 35%»): карточка чуть шире, мини-иконки под статистикой */
+.build-item:has(.build-alt) { width: auto; min-width: 46px; }
+.build-alt {
+  margin-top: 3px; font-size: 9px; line-height: 1.1;
+  display: flex; align-items: center; gap: 3px; white-space: nowrap;
+  border-top: 1px dashed var(--line); padding-top: 3px;
+}
+.build-alt-item { display: inline-flex; align-items: center; gap: 2px; }
+.build-alt-item .item img { width: 24px; height: 18px; }
 
 /* --- прокачка и таланты: как раздел «Способности» во внутриигровом гайде --- */
 .section-title {

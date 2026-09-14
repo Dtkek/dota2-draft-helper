@@ -158,6 +158,7 @@ def get_json(url, ttl=3600, timeout=45, stale_ok=True):
                 data = fetch(url, timeout)
                 _use_curl = fetch is _fetch_curl
                 _write_cache(url, data)
+                _last_error.pop(url, None)
                 return data
             except HttpStatusError as e:
                 # сервер ответил - вторым способом ответ будет тот же
@@ -172,6 +173,14 @@ def get_json(url, ttl=3600, timeout=45, stale_ok=True):
     if stale_ok:
         stale = _read_cache(url, ttl=None)
         if stale is not None:
+            # Устаревшая копия вместо ошибки - но не молча: иначе вкладка
+            # «Про-матчи» сутки показывала вчерашний список, и по ней было
+            # не понять, что OpenDota не отвечает. Причину помним и отдаём
+            # через status(), в лог - только при смене текста ошибки.
+            text = str(error)[:200]
+            if _last_error.get(url) != text:
+                sys.stderr.write(f"  сеть: {text}; показана копия из кэша для {url}\n")
+            _last_error[url] = text
             return stale
     raise RuntimeError(f"не удалось получить {url}: {error}")
 
@@ -223,6 +232,30 @@ def compute_in_background(key, fn):
     t = threading.Thread(target=worker, daemon=True)
     t.start()
     return t
+
+
+# url -> текст последней ошибки сети, из-за которой отдана копия из кэша
+_last_error = {}
+
+
+def status(url):
+    """Свежесть данных по url для интерфейса.
+
+    Возвращает {"updated_at": время последней удачной загрузки (unix) или
+    None, "age": секунд с тех пор, "error": текст ошибки, если последняя
+    попытка обновить не удалась}. Честность важнее гладкой картинки:
+    пользователь должен видеть, что смотрит на вчерашнюю копию.
+    """
+    path = _cache_path(url)
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = None
+    return {
+        "updated_at": int(mtime) if mtime else None,
+        "age": int(time.time() - mtime) if mtime else None,
+        "error": _last_error.get(url),
+    }
 
 
 def forget(url):
