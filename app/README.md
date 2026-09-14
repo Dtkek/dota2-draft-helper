@@ -5,7 +5,14 @@
 
 ## Запуск
 
-**Windows:** двойной клик по `start.bat` в корне проекта. Скрипт сам найдёт
+**Windows, без Python:** скачать `dota2-draft-helper-windows.zip` со страницы
+<https://github.com/Dtkek/dota2-draft-helper/releases/tag/latest>, распаковать
+и запустить `dota2-draft-helper.exe`. Внутри уже всё: Python, OpenCV, numpy.
+Архив пересобирается автоматически при каждом изменении в `main`
+(GitHub Actions, `.github/workflows/build-windows.yml`). Кэш, портреты
+героев и конфиг GSI приложение хранит рядом с собой, в папке `_internal`.
+
+**Windows, из исходников:** двойной клик по `start.bat` в корне проекта. Скрипт сам найдёт
 Python, при первом запуске поставит пакеты для чтения экрана и откроет браузер.
 Должно открыться чёрное окно консоли.
 
