@@ -1411,7 +1411,23 @@ function freshnessLine(f) {
   line.textContent = f.error
     ? `Свежий список получить не удалось (${f.error}). Показана копия: обновлена ${age}.`
     : `Обновлено ${age}.`;
+  line.title = 'OpenDota публикует про-матч только после разбора реплея - обычно через ' +
+    'несколько часов после игры, и только по лигам из своего справочника. ' +
+    'Поэтому список отстаёт от сайтов с результатами.';
   return line;
+}
+
+// «сегодня 16:41», «вчера 23:10», иначе «12.09 18:00» - по местному времени
+function whenPlayed(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  const now = new Date();
+  const hm = d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((day(now) - day(d)) / 86400000);
+  if (diffDays === 0) return 'сегодня ' + hm;
+  if (diffDays === 1) return 'вчера ' + hm;
+  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + hm;
 }
 
 async function loadProList(force) {
@@ -1442,7 +1458,9 @@ async function loadProList(force) {
       card.appendChild(teams);
       const meta = el('div', 'dim');
       const mins = m.duration ? Math.round(m.duration / 60) + ' мин' : '';
-      meta.textContent = [m.league, mins].filter(Boolean).join(' · ');
+      // когда сыгран: без этого не видно, что OpenDota отдаёт матчи с
+      // отставанием на часы - реплей сначала надо скачать и разобрать
+      meta.textContent = [whenPlayed(m.start_time), m.league, mins].filter(Boolean).join(' · ');
       card.appendChild(meta);
       card.addEventListener('click', () => loadProMatch(m.match_id));
       out.appendChild(card);
