@@ -40,6 +40,7 @@ const state = {
   heroes: [],
   byId: new Map(),
   brackets: [],
+  stratz: null,   // статус снимка STRATZ: доступен ли, дата, свои ранги
   roles: [],
   draft: { enemy: [], ally: [], banned: [], never: loadNever() },
   mode: 'enemy',
@@ -145,6 +146,7 @@ async function boot() {
     state.heroes = data.heroes;
     state.byId = new Map(data.heroes.map((h) => [h.id, h]));
     state.brackets = data.brackets;
+    state.stratz = data.stratz || null;
     $('#src-label').textContent = (data.snapshot
       ? 'источник: ' + data.source + ' (снимок)'
       : 'источник: ' + data.source) + ' · v' + (data.version || '?');
@@ -158,7 +160,8 @@ async function boot() {
     data.heroes.forEach((h) => h.roles.forEach((r) => roles.add(r)));
     state.roles = [...roles].sort();
 
-    fillSelect($('#bracket'), state.brackets.map((b) => [b.key, b.label]));
+    fillMatchupSources();
+    fillBrackets();
     fillSelect($('#meta-bracket'), state.brackets.map((b) => [b.key, b.label]));
     const posOptions = [['', 'Любая']]
       .concat((data.positions || []).map((p) => [p.key, p.label]));
@@ -216,6 +219,43 @@ function fillSelect(sel, pairs) {
     sel.appendChild(o);
   });
 }
+
+// Источник матчапов. STRATZ появляется в списке, только если его снимок
+// есть на диске; выбор запоминается, потому что STRATZ, когда он есть,
+// почти всегда лучше OpenDota - выборка на порядок больше.
+const MATCHUP_SOURCE_KEY = 'matchup_source';
+
+function fillMatchupSources() {
+  const sel = $('#matchup-source');
+  const pairs = [['opendota', 'OpenDota']];
+  const stz = state.stratz;
+  if (stz && stz.available) {
+    pairs.push(['stratz', 'STRATZ' + (stz.date ? ' (' + stz.date + ')' : '')]);
+  }
+  fillSelect(sel, pairs);
+  let saved = null;
+  try { saved = localStorage.getItem(MATCHUP_SOURCE_KEY); } catch (e) { /* приватный режим */ }
+  const want = saved || (stz && stz.available ? 'stratz' : 'opendota');
+  sel.value = pairs.some(([v]) => v === want) ? want : 'opendota';
+}
+
+// Ранги у источников разные: у OpenDota - по одному, у STRATZ - парами.
+// Список подменяется при смене источника; ключ ранга сохраняется, если
+// он есть и там, и там (это только «all»).
+function fillBrackets() {
+  const sel = $('#bracket');
+  const keep = sel.value;
+  const useStratz = $('#matchup-source').value === 'stratz' && state.stratz;
+  const list = useStratz ? state.stratz.brackets : state.brackets;
+  fillSelect(sel, list.map((b) => [b.key, b.label]));
+  if (list.some((b) => b.key === keep)) sel.value = keep;
+}
+
+$('#matchup-source').addEventListener('change', () => {
+  try { localStorage.setItem(MATCHUP_SOURCE_KEY, $('#matchup-source').value); }
+  catch (e) { /* приватный режим */ }
+  fillBrackets();
+});
 
 // ---------------------------------------------------------------- драфт
 $('#mode').addEventListener('click', (e) => {
@@ -307,7 +347,9 @@ function renderSlots() {
     });
 }
 
-['#bracket', '#position', '#limit', '#tour-weight', '#tour-period'].forEach((sel) =>
+// #matchup-source стоит после своего обработчика выше: сначала подменяется
+// список рангов, потом пересчёт читает уже новый ранг
+['#matchup-source', '#bracket', '#position', '#limit', '#tour-weight', '#tour-period'].forEach((sel) =>
   $(sel).addEventListener('change', refreshRecommendations));
 
 let recToken = 0;
@@ -334,6 +376,7 @@ async function refreshRecommendations() {
         ally: state.draft.ally,
         // «не предлагать» для сервера — те же баны: их просто нет в выдаче
         banned: state.draft.banned.concat(state.draft.never),
+        matchup_source: $('#matchup-source').value,
         bracket: $('#bracket').value,
         position: $('#position').value,
         limit: Number($('#limit').value),
@@ -362,11 +405,15 @@ function renderRecommendations(out, data) {
   }
   const withTour = data.tour_weight > 0;
   const withMe = data.personal_weight > 0;
+  // синергия есть только у STRATZ и только когда выбраны союзники
+  const withSyn = rows.some((r) => r.synergy_pp !== null && r.synergy_pp !== undefined);
   const max = Math.max(...rows.map((r) => Math.abs(r.score_pp)), 1);
   const table = el('table');
   table.innerHTML = `<thead><tr>
       <th>#</th><th>Герой</th><th class="num">Балл</th>
-      <th class="num">Матчапы</th><th class="num">База</th>
+      <th class="num">Матчапы</th>
+      ${withSyn ? '<th class="num">Синергия</th>' : ''}
+      <th class="num">База</th>
       ${withTour ? '<th class="num">Турниры</th>' : ''}
       ${withMe ? '<th class="num">Мои</th><th class="num">Мои игры</th>' : ''}
       <th class="num">Винрейт</th><th class="num">Выборка</th>
@@ -402,6 +449,15 @@ function renderRecommendations(out, data) {
     tr.appendChild(tdScore);
 
     tr.appendChild(el('td', 'num ' + cls(r.matchup_pp), sign(r.matchup_pp)));
+    if (withSyn) {
+      const sp = r.synergy_pp || 0;
+      const td = el('td', 'num ' + cls(sp), sign(sp));
+      td.title = (r.per_ally || []).map((pa) => {
+        const ally = state.byId.get(pa.ally_id);
+        return (ally ? ally.name : pa.ally_id) + ' ' + sign(pa.syn_pp) + ' (' + pa.games + ' игр)';
+      }).join('\n');
+      tr.appendChild(td);
+    }
     tr.appendChild(el('td', 'num ' + cls(r.base_pp), sign(r.base_pp)));
     if (withTour) {
       const tp = r.tour_pp || 0;
@@ -439,8 +495,14 @@ function renderRecommendations(out, data) {
 
   const legend = el('div', 'dim');
   legend.style.marginTop = '10px';
+  const viaStratz = data.matchup_source === 'stratz';
   legend.textContent =
-    'Балл в процентных пунктах. Матчапы — вклад контрпика, База — сила героя в выбранном ранге. ' +
+    'Балл в процентных пунктах. Матчапы — вклад контрпика, База — сила героя в выбранном ранге' +
+    (viaStratz ? ' и на выбранной позиции' : '') + '. ' +
+    (withSyn
+      ? 'Синергия — насколько герой вместе с вашими союзниками выигрывает чаще, чем они в среднем ' +
+        '(наведите на число — вклад каждого союзника). '
+      : '') +
     (withTour
       ? `Турниры — востребованность и винрейт у про за выбранный период (${data.tour_matches} матчей), ` +
         `вес ${data.tour_weight}: чем выше, тем сильнее турнирная мета перевешивает остальное. `
@@ -450,7 +512,14 @@ function renderRecommendations(out, data) {
         'герой, которого вы не брали, получает минус, основной — плюс. '
       : '') +
     'Полупрозрачные пары — менее 15 игр в выборке. ' +
-    'Сглаживание K = ' + orDash(data.k_shrink) + '.';
+    'Сглаживание K = ' + orDash(data.k_shrink) +
+    (withSyn ? ', для синергии K = ' + orDash(data.k_synergy) : '') + '.' +
+    (viaStratz
+      ? ' Матчапы, синергия и позиции — по снимку STRATZ' +
+        (state.stratz && state.stratz.weeks && state.stratz.weeks.length
+          ? ' за недели с ' + state.stratz.weeks[state.stratz.weeks.length - 1] : '') +
+        ' · Powered by STRATZ.'
+      : '');
   out.appendChild(legend);
 }
 

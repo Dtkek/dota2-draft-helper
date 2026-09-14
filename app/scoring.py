@@ -3,9 +3,10 @@
 
 Как считается оценка
 --------------------
-Итоговый балл героя H против вражеского драфта E складывается из двух частей:
+Итоговый балл героя H против вражеского драфта E складывается из двух частей
+(и третьей - синергии, см. ниже - когда источник её умеет):
 
-    score(H) = W_MATCHUP * Σ_{e∈E} adv(H, e) + W_BASE * (winrate(H) − средний winrate)
+    score(H) = W_MATCHUP * среднее_{e∈E} adv(H, e) + W_BASE * (winrate(H) − средний winrate)
 
 1. adv(H, e) — насколько H лучше играет против e, чем e играет в среднем.
    Считается из матчапов: если e против H побеждает реже, чем вообще,
@@ -30,15 +31,22 @@ OpenDota отдаёт матчапы по публичным матчам: ок�
 при маленькой выборке оценка прижимается к нулю, при большой — работает почти
 целиком. K задаётся в K_SHRINK.
 
-Чего здесь нет
---------------
-Синергии между союзниками: OpenDota не отдаёт винрейт пар героев в одной
-команде. Своих героев мы учитываем только как «этих уже нельзя брать».
+Синергия
+--------
+OpenDota не отдаёт винрейт пар героев в одной команде, поэтому с ним свои
+герои учитываются только как «этих уже нельзя брать». STRATZ такие пары
+отдаёт, и с ним в балл входит третье слагаемое - среднее по союзникам
+syn(H, a): насколько H вместе с a выигрывает чаще, чем a в среднем.
+Сглаживается так же, как матчапы, со своим K: разброс у синергий другой.
 """
 
 # вес матчапов и вес базовой силы героя в итоговом балле
 W_MATCHUP = 1.0
 W_BASE = 0.6
+
+# вес синергии с уже взятыми союзниками; работает только с источником,
+# который отдаёт пары «вместе» (STRATZ)
+W_SYNERGY = 1.0
 
 # Турнирная составляющая: насколько герой востребован и успешен у про.
 # Вес выше, чем у остальных: по просьбе владельца турнирная мета имеет
@@ -71,12 +79,20 @@ def _safe_ratio(wins, games):
     return (wins / games) if games else None
 
 
-def build_base_winrates(source, bracket):
-    """Базовый винрейт каждого героя в выбранном ранге + средний по всем."""
+def build_base_winrates(source, bracket, base_stats=None):
+    """Базовый винрейт каждого героя в выбранном ранге + средний по всем.
+
+    base_stats - {hero_id: (игр, побед)} от другого источника (STRATZ по
+    рангу и позиции). Если передан, ранг source не используется: справочник
+    героев всё равно берётся из source, а числа - отсюда.
+    """
     stats = source.hero_stats()
     base = {}
     for h in stats:
-        picks, wins = source.picks_wins(h, bracket)
+        if base_stats is not None:
+            picks, wins = base_stats.get(h["id"], (0, 0))
+        else:
+            picks, wins = source.picks_wins(h, bracket)
         base[h["id"]] = _safe_ratio(wins, picks) if picks >= MIN_PICKS else None
     known = [v for v in base.values() if v is not None]
     mean = sum(known) / len(known) if known else 0.5
@@ -225,19 +241,64 @@ def matchup_tables(source, enemy_ids):
     return shrink(raw, k), k
 
 
+def raw_synergy_table(provider, ally_id):
+    """Несглаженные синергии с ally_id: {hero_id: (raw_syn, n, p)}.
+
+    provider.synergies(ally_id) отдаёт игры и победы ally_id в одной команде
+    с каждым героем. База - винрейт ally_id по всей его таблице «вместе»,
+    как у матчапов: числитель и знаменатель из одной выборки.
+    """
+    rows = provider.synergies(ally_id)
+    total_games = sum((r.get("games_played") or 0) for r in rows)
+    total_wins = sum((r.get("wins") or 0) for r in rows)
+    baseline = _safe_ratio(total_wins, total_games)
+    if baseline is None:
+        return {}
+
+    table = {}
+    for row in rows:
+        n = row.get("games_played") or 0
+        if n <= 0:
+            continue
+        p = (row.get("wins") or 0) / n
+        # выигрывают вместе - знак плюс, в отличие от матчапов
+        table[row["hero_id"]] = (p - baseline, n, p)
+    return table
+
+
+def synergy_tables(provider, ally_ids):
+    """Сглаженные таблицы синергий + своё K: разброс у пар «вместе» другой."""
+    raw = {a: raw_synergy_table(provider, a) for a in ally_ids}
+    k = estimate_k(raw)
+    return shrink(raw, k), k
+
+
 def recommend(source, enemy_ids, ally_ids=(), banned_ids=(), bracket="all",
               role=None, limit=15, allowed_ids=None, tour=None, tour_weight=W_TOUR,
-              personal=None, personal_info=None, personal_weight=W_PERSONAL):
+              personal=None, personal_info=None, personal_weight=W_PERSONAL,
+              matchups=None, synergies=None, base_stats=None,
+              synergy_weight=W_SYNERGY):
     """Топ героев против вражеского драфта.
 
     enemy_ids — герои противника, ally_ids — уже взятые свои,
     banned_ids — забаненные. Возвращает список словарей, отсортированный по баллу.
+
+    matchups - откуда брать матчапы: объект с .matchups(hero_id); по умолчанию
+    сам source. synergies - объект с .synergies(hero_id), если источник умеет
+    пары «вместе»; без него синергия не считается. base_stats - базовые
+    винрейты другого источника, см. build_base_winrates.
     """
     enemy_ids = [int(x) for x in enemy_ids]
-    excluded = set(int(x) for x in list(ally_ids) + list(banned_ids)) | set(enemy_ids)
+    ally_ids = [int(x) for x in ally_ids]
+    excluded = set(ally_ids) | set(int(x) for x in banned_ids) | set(enemy_ids)
 
-    base, mean_base, stats_by_id = build_base_winrates(source, bracket)
-    tables, k_used = matchup_tables(source, enemy_ids)
+    base, mean_base, stats_by_id = build_base_winrates(source, bracket, base_stats)
+    tables, k_used = matchup_tables(matchups or source, enemy_ids)
+
+    syn_tables, k_syn = {}, None
+    with_synergy = bool(synergies is not None and ally_ids and synergy_weight)
+    if with_synergy:
+        syn_tables, k_syn = synergy_tables(synergies, ally_ids)
 
     results = []
     for hero_id, stat in stats_by_id.items():
@@ -265,6 +326,17 @@ def recommend(source, enemy_ids, ally_ids=(), banned_ids=(), bracket="all",
         # остаётся интерпретируемым: «столько винрейта против типичного из них».
         matchup_avg = matchup_sum / len(enemy_ids)
 
+        # синергия: среднее по союзникам, по той же логике, что и матчапы
+        per_ally = []
+        syn_avg = 0.0
+        if with_synergy:
+            syn_sum = 0.0
+            for a in ally_ids:
+                syn, n = syn_tables[a].get(hero_id, (0.0, 0))
+                syn_sum += syn
+                per_ally.append({"ally_id": a, "syn_pp": round(syn * 100, 2), "games": n})
+            syn_avg = syn_sum / len(ally_ids)
+
         hero_base = base.get(hero_id)
         base_delta = (hero_base - mean_base) if hero_base is not None else 0.0
 
@@ -275,9 +347,12 @@ def recommend(source, enemy_ids, ally_ids=(), banned_ids=(), bracket="all",
         mine = (personal_info or {}).get(hero_id) or {}
 
         score = (W_MATCHUP * matchup_avg + W_BASE * base_delta
+                 + synergy_weight * syn_avg
                  + tour_weight * tour_val + personal_weight * pers_val)
 
         results.append({
+            "synergy_pp": round(synergy_weight * syn_avg * 100, 2) if with_synergy else None,
+            "per_ally": per_ally,
             "personal_pp": round(personal_weight * pers_val * 100, 2),
             "my_games": mine.get("games"),
             "my_winrate": mine.get("winrate"),
@@ -297,7 +372,7 @@ def recommend(source, enemy_ids, ally_ids=(), banned_ids=(), bracket="all",
         })
 
     results.sort(key=lambda r: r["score_pp"], reverse=True)
-    return results[:limit], round(k_used)
+    return results[:limit], round(k_used), (round(k_syn) if k_syn is not None else None)
 
 
 def draft_edge(source, radiant_ids, dire_ids, bracket="all"):

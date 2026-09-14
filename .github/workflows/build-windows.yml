@@ -45,6 +45,7 @@ jobs:
           --hidden-import vision.recognize
           --hidden-import vision.icons
           --hidden-import sources.opendota
+          --hidden-import sources.stratz
           --collect-submodules mss
           app/server.py
 
@@ -75,14 +76,16 @@ jobs:
           name: dota2-draft-helper-windows
           path: dota2-draft-helper-windows.zip
 
+      # релиз и на push, и на ручной запуск: через dispatch сборку
+      # запускает обновление снимка STRATZ (update-stratz.yml)
       - name: Передвинуть тег latest
-        if: github.event_name == 'push'
+        if: github.ref == 'refs/heads/main'
         run: |
           git tag -f latest
           git push -f origin latest
 
       - name: Релиз latest
-        if: github.event_name == 'push'
+        if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest

@@ -29,7 +29,7 @@ import gsi  # noqa: E402
 import net  # noqa: E402
 import scoring  # noqa: E402
 import vision  # noqa: E402
-from sources import get_source  # noqa: E402
+from sources import get_source, get_stratz  # noqa: E402
 
 _watcher = None
 _watcher_lock = threading.Lock()
@@ -109,7 +109,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-14.2"
+VERSION = "2026-09-14.3"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -802,6 +802,7 @@ class Handler(BaseHTTPRequestHandler):
                     "positions": [{"key": k, "label": v}
                                   for k, v in POSITION_LABELS],
                     "source": src.name,
+                    "stratz": get_stratz().status(),
                     "version": VERSION,
                     "snapshot": snapshot,
                     "snapshot_note": (
@@ -963,7 +964,32 @@ class Handler(BaseHTTPRequestHandler):
                 enemy = data.get("enemy") or []
                 if not enemy:
                     return self._json({"error": "не выбран ни один герой противника"}, 400)
-                bracket, note = resolve_bracket(src, data.get("bracket") or "all")
+
+                # источник матчапов: OpenDota (по умолчанию) или снимок STRATZ.
+                # Со STRATZ ранг, базовые винрейты, фильтр по позиции и
+                # синергия берутся из его снимка; всё остальное - как обычно.
+                matchup_source = (data.get("matchup_source") or "opendota").lower()
+                position = data.get("position")
+                stratz_bound, base_stats, allowed_ids = None, None, ids_for_position(position)
+                if matchup_source == "stratz":
+                    stz = get_stratz()
+                    stz.maybe_refresh()
+                    bracket = data.get("bracket") or "all"
+                    stratz_bound = stz.bound(bracket)
+                    if stratz_bound is None and bracket != "all":
+                        stratz_bound = stz.bound("all")
+                        note = f"в снимке STRATZ нет ранга «{bracket}», показаны все ранги"
+                        bracket = "all"
+                    else:
+                        note = None
+                    if stratz_bound is None:
+                        matchup_source = "opendota"
+                        note = "снимок STRATZ недоступен, матчапы взяты из OpenDota"
+                    else:
+                        base_stats = stz.base_stats(bracket, position)
+                        allowed_ids = stz.position_ids(bracket, position)
+                if matchup_source != "stratz":
+                    bracket, note = resolve_bracket(src, data.get("bracket") or "all")
 
                 # турнирная составляющая: вес выбирает пользователь,
                 # 0 - не учитывать. Если база турниров недоступна, подбор
@@ -1007,7 +1033,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     personal_weight = 0.0
 
-                rows, k_shrink = scoring.recommend(
+                rows, k_shrink, k_synergy = scoring.recommend(
                     src,
                     enemy_ids=enemy,
                     ally_ids=data.get("ally") or [],
@@ -1015,19 +1041,24 @@ class Handler(BaseHTTPRequestHandler):
                     bracket=bracket,
                     role=data.get("role") or None,
                     limit=int(data.get("limit") or 15),
-                    allowed_ids=ids_for_position(data.get("position")),
+                    allowed_ids=allowed_ids,
                     tour=tour,
                     tour_weight=tour_weight,
                     personal=personal,
                     personal_info=personal_info,
                     personal_weight=personal_weight,
+                    matchups=stratz_bound,
+                    synergies=stratz_bound,
+                    base_stats=base_stats,
                 )
                 return self._json({
                     "rows": rows,
                     "source": src.name,
+                    "matchup_source": matchup_source,
                     "bracket_used": bracket,
                     "note": note,
                     "k_shrink": k_shrink,
+                    "k_synergy": k_synergy,
                     "tour_weight": tour_weight,
                     "tour_matches": tour_matches,
                     "tour_note": tour_note,

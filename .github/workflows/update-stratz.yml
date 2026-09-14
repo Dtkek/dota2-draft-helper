@@ -1,0 +1,52 @@
+# Обновление снимка STRATZ (app/data/stratz_fallback.json.gz) раз в неделю.
+#
+# Недели у STRATZ начинаются в четверг, поэтому снимок собирается в пятницу:
+# предыдущая неделя уже целиком закрыта. Токен - секрет репозитория
+# STRATZ_TOKEN (Settings → Secrets and variables → Actions). После коммита
+# запускается сборка exe вручную через workflow_dispatch: push от
+# GITHUB_TOKEN другие workflow не запускает, а dispatch - запускает.
+name: Снимок STRATZ
+
+on:
+  schedule:
+    - cron: "0 6 * * 5"   # пятница, 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Собрать снимок
+        env:
+          STRATZ_TOKEN: ${{ secrets.STRATZ_TOKEN }}
+        run: python3 app/tools/update_stratz.py
+
+      - name: Закоммитить, если изменился
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/data/stratz_fallback.json.gz
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "Снимок STRATZ от $(date -u +%Y-%m-%d)"
+            git push
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Пересобрать exe со свежим снимком
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build-windows.yml --ref main

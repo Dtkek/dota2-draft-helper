@@ -24,14 +24,24 @@ _use_curl = False
 
 
 def _context():
-    """SSL-контекст с сертификатами certifi, если он установлен."""
+    """SSL-контекст с сертификатами certifi, если он установлен.
+
+    Без certifi на macOS берётся системный файл /etc/ssl/cert.pem: у python
+    из коробки там пустое хранилище, и любой https падал на проверке
+    сертификата. Раньше это спасал откат на curl, но постоянное соединение
+    (STRATZ) через curl не сделать.
+    """
     global _ssl_context
     if _ssl_context is None:
         try:
             import certifi
             _ssl_context = ssl.create_default_context(cafile=certifi.where())
         except ImportError:
-            _ssl_context = ssl.create_default_context()
+            system_pem = "/etc/ssl/cert.pem"
+            if os.path.exists(system_pem):
+                _ssl_context = ssl.create_default_context(cafile=system_pem)
+            else:
+                _ssl_context = ssl.create_default_context()
     return _ssl_context
 
 
