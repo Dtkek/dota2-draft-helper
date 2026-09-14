@@ -86,6 +86,17 @@ goto run
 :packages_ok
 echo Пакеты для чтения экрана на месте.
 
+rem --- собственное окно (pywebview) ----------------------------------------
+rem Без него приложение откроется во вкладке браузера - это не ошибка,
+rem поэтому здесь без предупреждений и пауз.
+%PY% -c "import webview" >nul 2>nul
+if not errorlevel 1 goto window_ok
+echo Устанавливаю pywebview для собственного окна...
+%PY% -m pip install -r app\requirements-window.txt >nul 2>nul || %PY% -m pip install --user -r app\requirements-window.txt >nul 2>nul
+%PY% -c "import webview" >nul 2>nul
+if errorlevel 1 echo pywebview не установился - открою в браузере.
+:window_ok
+
 :run
 echo.
 echo Запускаю драфт-хелпер. Браузер откроется сам.

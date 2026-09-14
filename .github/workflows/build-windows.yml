@@ -28,7 +28,7 @@ jobs:
       - name: Пакеты
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller numpy opencv-python-headless mss certifi
+          python -m pip install pyinstaller numpy opencv-python-headless mss certifi pywebview
 
       - name: PyInstaller
         # onedir, а не onefile: приложение пишет рядом с собой кэш API,
@@ -47,6 +47,7 @@ jobs:
           --hidden-import sources.opendota
           --hidden-import sources.stratz
           --collect-submodules mss
+          --collect-all webview
           app/server.py
 
       - name: Проверка запуска

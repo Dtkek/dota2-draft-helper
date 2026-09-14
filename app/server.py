@@ -29,6 +29,7 @@ import gsi  # noqa: E402
 import net  # noqa: E402
 import scoring  # noqa: E402
 import vision  # noqa: E402
+import window  # noqa: E402
 from sources import get_source, get_stratz  # noqa: E402
 
 _watcher = None
@@ -109,7 +110,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-14.3"
+VERSION = "2026-09-14.4"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -1127,7 +1128,12 @@ def main():
     ap = argparse.ArgumentParser(description="Драфт-хелпер для Dota 2")
     ap.add_argument("--port", type=int, default=8777)
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--no-browser", action="store_true",
+                    help="только сервер: ни окна, ни браузера")
+    ap.add_argument("--browser", action="store_true",
+                    help="открыть вкладку в браузере вместо собственного окна")
+    ap.add_argument("--on-top", action="store_true",
+                    help="собственное окно сразу поверх остальных")
     args = ap.parse_args()
 
     # Прогреваем справочник до старта сервера: так в консоли сразу видно,
@@ -1184,7 +1190,24 @@ def main():
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://{args.host}:{args.port}"
     say(f"\nДрафт-хелпер запущен: {url}")
+
+    # Собственное окно, если есть pywebview и не просили браузер. Сервер
+    # уходит в поток, окно занимает главный поток (так требует macOS);
+    # закрыли окно - остановили сервер.
+    use_window = window.AVAILABLE and not args.no_browser and not args.browser
+    if use_window:
+        say("Закройте окно, чтобы остановить.")
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            window.run(url, on_top=args.on_top, on_closed=httpd.shutdown)
+        except KeyboardInterrupt:
+            pass
+        print("\nОстановлено.")
+        return
+
     say("Ctrl+C — остановить.")
+    if not window.AVAILABLE and not args.no_browser and not args.browser:
+        say(f"  ({window.requirements_hint()} - открываю в браузере)")
     if not args.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:

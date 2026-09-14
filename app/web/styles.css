@@ -52,6 +52,10 @@ h1 span { color: var(--accent); }
 
 .spacer { flex: 1; }
 .src { color: var(--muted); font-size: 12px; }
+/* переключатель «поверх окон» - только в собственном окне приложения */
+.ontop { display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+.ontop input { margin: 0; accent-color: var(--accent); }
+.ontop[hidden] { display: none; }
 
 main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .view { display: none; }

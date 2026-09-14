@@ -1581,4 +1581,23 @@ function heroRow(items, isBan) {
   return row;
 }
 
+// ---------------------------------------------------------------- собственное окно
+// В окне pywebview страница получает window.pywebview.api - методы из
+// app/window.py. В браузере события pywebviewready не будет, и переключатель
+// «поверх окон» так и останется скрытым.
+window.addEventListener('pywebviewready', async () => {
+  const box = $('#ontop');
+  const check = $('#ontop-check');
+  try {
+    check.checked = await window.pywebview.api.get_on_top();
+  } catch (e) { /* старый pywebview без get_on_top — оставим снятым */ }
+  box.hidden = false;
+  check.addEventListener('change', () => {
+    window.pywebview.api.set_on_top(check.checked).catch((e) => {
+      console.error('поверх окон:', e);
+      check.checked = !check.checked;
+    });
+  });
+});
+
 boot();
