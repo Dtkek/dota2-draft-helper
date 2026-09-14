@@ -467,12 +467,18 @@ class OpenDotaSource(HeroSource):
     def player_profile(self, account_id):
         return get_json(f"{API}/players/{int(account_id)}", ttl=24 * 3600)
 
-    def player_heroes(self, account_id):
-        """Игры и победы на каждом герое, с ним и против него."""
-        return get_json(f"{API}/players/{int(account_id)}/heroes", ttl=3600)
+    def player_heroes(self, account_id, fast=False):
+        """Игры и победы на каждом герое, с ним и против него.
 
-    def player_wl(self, account_id):
-        return get_json(f"{API}/players/{int(account_id)}/wl", ttl=3600)
+        fast - не ждать сеть: из кэша (пусть устаревшего), иначе None и
+        загрузка в фоне. Так работает подбор во время пика.
+        """
+        url = f"{API}/players/{int(account_id)}/heroes"
+        return net.get_json_fast(url, ttl=3600) if fast else get_json(url, ttl=3600)
+
+    def player_wl(self, account_id, fast=False):
+        url = f"{API}/players/{int(account_id)}/wl"
+        return net.get_json_fast(url, ttl=3600) if fast else get_json(url, ttl=3600)
 
     # --- прокачка и таланты -----------------------------------------------
     def hero_skills(self, hero_id, months=3, tier="top"):

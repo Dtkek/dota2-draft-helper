@@ -71,6 +71,29 @@ def _write_cache(url, data):
     os.replace(tmp, _cache_path(url))
 
 
+class HttpStatusError(RuntimeError):
+    """Сервер ответил, но кодом ошибки. Отдельный тип, чтобы 429/5xx повторять."""
+
+    def __init__(self, code, url):
+        self.code = code
+        hint = {429: "лимит запросов, подождите минуту", 502: "сервер недоступен",
+                503: "сервер недоступен", 504: "сервер не ответил вовремя"}.get(code, "")
+        super().__init__(f"HTTP {code}" + (f" ({hint})" if hint else "") + f" от {url.split('/api/')[0]}")
+
+
+def _parse_json(raw_text, url):
+    # Пустой ответ или HTML-страница ошибки вместо JSON - частая форма
+    # отказа OpenDota. Сообщение «Expecting value: line 1 column 1» ничего
+    # не говорит пользователю; говорим, что именно пришло.
+    text = raw_text.strip()
+    if not text:
+        raise RuntimeError(f"пустой ответ от {url.split('/api/')[0]}")
+    if text[0] not in "[{":
+        raise RuntimeError(f"не JSON, а «{text[:60]}…» от {url.split('/api/')[0]} "
+                           "(обычно страница ошибки или лимита запросов)")
+    return json.loads(text)
+
+
 def _fetch_urllib(url, timeout):
     # Сжатие обязательно: heroStats весит 161 КБ, а со сжатием 33 КБ.
     # На нестабильных каналах большой ответ просто не доходит — соединение
@@ -79,22 +102,34 @@ def _fetch_urllib(url, timeout):
         "User-Agent": UA,
         "Accept-Encoding": "gzip",
     })
-    with urllib.request.urlopen(req, timeout=timeout, context=_context()) as r:
-        raw = r.read()
-        if r.headers.get("Content-Encoding") == "gzip":
-            raw = gzip.decompress(raw)
-    return json.loads(raw.decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=_context()) as r:
+            raw = r.read()
+            if r.headers.get("Content-Encoding") == "gzip":
+                raw = gzip.decompress(raw)
+    except urllib.error.HTTPError as e:
+        raise HttpStatusError(e.code, url) from None
+    return _parse_json(raw.decode("utf-8", "replace"), url)
 
 
 def _fetch_curl(url, timeout):
+    # -f: страница ошибки 429/5xx не должна попадать в разбор JSON
     out = subprocess.run(
-        ["curl", "-sS", "-L", "--compressed", "--max-time", str(timeout),
+        ["curl", "-sS", "-L", "-f", "--compressed", "--max-time", str(timeout),
+         "-w", "\n%{http_code}",
          "-H", f"User-Agent: {UA}", url],
         capture_output=True, text=True,
     )
+    body, _, code = out.stdout.rpartition("\n")
+    if out.returncode == 22 and code.strip().isdigit():
+        raise HttpStatusError(int(code.strip()), url)
     if out.returncode != 0:
         raise RuntimeError(f"curl вернул код {out.returncode}: {out.stderr.strip()[:200]}")
-    return json.loads(out.stdout)
+    return _parse_json(body, url)
+
+
+# после таких кодов вторая попытка через паузу обычно проходит
+RETRY_CODES = {429, 500, 502, 503, 504}
 
 
 def get_json(url, ttl=3600, timeout=45, stale_ok=True):
@@ -102,6 +137,7 @@ def get_json(url, ttl=3600, timeout=45, stale_ok=True):
 
     Если сеть недоступна, а в кэше есть просроченная копия, возвращается она
     (stale_ok): для драфт-хелпера вчерашние винрейты лучше, чем ошибка.
+    На 429/5xx - одна повторная попытка через пару секунд.
     """
     global _use_curl
     cached = _read_cache(url, ttl)
@@ -110,20 +146,73 @@ def get_json(url, ttl=3600, timeout=45, stale_ok=True):
 
     error = None
     order = (_fetch_curl, _fetch_urllib) if _use_curl else (_fetch_urllib, _fetch_curl)
-    for fetch in order:
-        try:
-            data = fetch(url, timeout)
-            _use_curl = fetch is _fetch_curl
-            _write_cache(url, data)
-            return data
-        except Exception as e:  # noqa: BLE001 — нужен любой сбой, чтобы попробовать запасной путь
-            error = e
+    for attempt in range(2):
+        for fetch in order:
+            try:
+                data = fetch(url, timeout)
+                _use_curl = fetch is _fetch_curl
+                _write_cache(url, data)
+                return data
+            except Exception as e:  # noqa: BLE001 — нужен любой сбой, чтобы попробовать запасной путь
+                error = e
+        if not (isinstance(error, HttpStatusError) and error.code in RETRY_CODES):
+            break
+        time.sleep(2.5)
 
     if stale_ok:
         stale = _read_cache(url, ttl=None)
         if stale is not None:
             return stale
     raise RuntimeError(f"не удалось получить {url}: {error}")
+
+
+def get_json_fast(url, ttl=3600, max_age=7 * 24 * 3600):
+    """То же, но никогда не ждёт сеть.
+
+    Свежий кэш - вернуть. Иначе запустить обновление в фоне и вернуть
+    устаревшую копию, если она не старше max_age; если копии нет - None.
+    Для всего, что участвует в подборе во время пика: там ждать нельзя.
+    """
+    fresh = _read_cache(url, ttl)
+    if fresh is not None:
+        return fresh
+    refresh_in_background(url, ttl)
+    return _read_cache(url, max_age)
+
+
+# --- памятка вычислений ------------------------------------------------------
+# Результат дорогой функции (турнирная статистика собирается несколькими
+# запросами к базе OpenDota) кладётся в тот же кэш под своим ключом, чтобы
+# подбор брал готовое, а пересчёт шёл в фоне.
+
+def memo_read(key, max_age=None):
+    return _read_cache("memo://" + key, max_age)
+
+
+def memo_write(key, data):
+    _write_cache("memo://" + key, data)
+
+
+def compute_in_background(key, fn):
+    """Один поток на ключ: считает fn() и кладёт результат в памятку."""
+    url = "memo://" + key
+    with _refresh_lock:
+        if url in _refreshing:
+            return None
+        _refreshing.add(url)
+
+    def worker():
+        try:
+            memo_write(key, fn())
+        except Exception:  # noqa: BLE001 — фоновый пересчёт не критичен
+            pass
+        finally:
+            with _refresh_lock:
+                _refreshing.discard(url)
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    return t
 
 
 def forget(url):

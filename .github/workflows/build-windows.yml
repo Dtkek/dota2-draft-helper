@@ -34,8 +34,12 @@ jobs:
         # onedir, а не onefile: приложение пишет рядом с собой кэш API,
         # скачанные портреты и конфиг GSI - при onefile они бы терялись
         # при каждом запуске (распаковка во временную папку).
+        # --windowed: без чёрного окна консоли. Вывод при этом идёт в
+        # dota2-draft-helper.log рядом с exe, падение - в окно сообщения
+        # (см. redirect_output_to_log и message_box в server.py).
         run: >
-          pyinstaller --noconfirm --clean --onedir --console
+          pyinstaller --noconfirm --clean --onedir --windowed
+          --icon app/icon.ico
           --name dota2-draft-helper
           --paths app
           --add-data "app/web;web"
@@ -66,7 +70,8 @@ jobs:
           Get-ChildItem $dir -Recurse -File | ForEach-Object {
             Set-Content -Path $_.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
           }
-          $p = Start-Process -FilePath (Join-Path $dir "dota2-draft-helper.exe") -ArgumentList "--port","8791" -PassThru -RedirectStandardOutput run.log -RedirectStandardError run.err
+          # exe без консоли пишет вывод сам - в dota2-draft-helper.log рядом с собой
+          $p = Start-Process -FilePath (Join-Path $dir "dota2-draft-helper.exe") -ArgumentList "--port","8791" -PassThru
           Start-Sleep -Seconds 15
           try {
             if ($p.HasExited) { throw "exe завершился с кодом $($p.ExitCode) до проверки" }
@@ -77,10 +82,10 @@ jobs:
           } finally {
             if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
             Start-Sleep -Seconds 1
-            Write-Host "--- stdout:"; Get-Content run.log -ErrorAction SilentlyContinue
-            Write-Host "--- stderr:"; Get-Content run.err -ErrorAction SilentlyContinue
+            Write-Host "--- dota2-draft-helper.log:"; Get-Content (Join-Path $dir "dota2-draft-helper.log") -ErrorAction SilentlyContinue
           }
-          $log = (Get-Content run.log -Raw -ErrorAction SilentlyContinue) + (Get-Content run.err -Raw -ErrorAction SilentlyContinue)
+          $log = Get-Content (Join-Path $dir "dota2-draft-helper.log") -Raw -ErrorAction SilentlyContinue
+          if (-not $log) { throw "exe не создал dota2-draft-helper.log - вывод без консоли не перенаправился" }
           if ($log -match "окно не открылось") { throw "окно pywebview не открылось, сработал откат в браузер - см. вывод выше" }
 
       - name: Архив
@@ -100,7 +105,7 @@ jobs:
           path: dota2-draft-helper-windows.zip
 
       # релиз и на push, и на ручной запуск: через dispatch сборку
-      # запускает обновление снимка STRATZ (update-stratz.yml)
+      # запускает обновление снимка STRATZ (update-snapshots.yml)
       - name: Передвинуть тег latest
         if: github.ref == 'refs/heads/main'
         run: |

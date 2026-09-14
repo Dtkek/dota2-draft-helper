@@ -11,7 +11,7 @@
 лимиты API не расходуются на каждого, а токен, привязанный к IP, не ломается
 на VPN. Данные STRATZ и так недельные - снимок раз в неделю ничего не теряет.
 В репозитории снимок обновляет GitHub Actions
-(.github/workflows/update-stratz.yml) с токеном из секретов.
+(.github/workflows/update-snapshots.yml) с токеном из секретов.
 """
 import argparse
 import os

@@ -23,7 +23,7 @@
 **Сделано:** сборка exe через GitHub Actions (релиз `latest`); STRATZ как
 второй источник матчапов — снимок `app/data/stratz_fallback.json.gz`,
 синергия, ранги, позиции по данным, еженедельное обновление снимка
-(`update-stratz.yml`, секрет `STRATZ_TOKEN` добавлен); собственное окно
+(`update-snapshots.yml`, секрет `STRATZ_TOKEN` добавлен); собственное окно
 приложения на pywebview (`app/window.py`) с «поверх окон»; обход кириллицы
 в пути для pythonnet (копия `Python.Runtime.dll` в `%TEMP%`); передача
 `docs/handoff_2026-09-14.md`.

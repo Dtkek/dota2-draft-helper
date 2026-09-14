@@ -118,13 +118,15 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-14.8"
+VERSION = "2026-09-14.9"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
 }
 
 
@@ -237,9 +239,71 @@ def meta_table(source, bracket, role=None, allowed_ids=None):
     return rows
 
 
+TOUR_SNAPSHOT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "data", "tournament_fallback.json.gz")
+# турнирная статистика свежая столько же, сколько кэш её запросов к базе
+TOUR_FRESH = 6 * 3600
+# устаревшая памятка старше этого не используется - лучше снимок из репозитория
+TOUR_MAX_AGE = 14 * 24 * 3600
+
+_tour_snapshot_cache = None
+tour_snapshot_date = None
+
+
+def tournament_snapshot():
+    """Снимок турнирной статистики из репозитория: {tier: {months: {rows, total}}}."""
+    global _tour_snapshot_cache, tour_snapshot_date
+    if _tour_snapshot_cache is not None:
+        return _tour_snapshot_cache
+    try:
+        import gzip
+        with gzip.open(TOUR_SNAPSHOT, "rt", encoding="utf-8") as f:
+            payload = json.load(f)
+        _tour_snapshot_cache = payload.get("stats") or {}
+        tour_snapshot_date = payload.get("снято")
+    except (OSError, ValueError):
+        _tour_snapshot_cache = {}
+    return _tour_snapshot_cache
+
+
+def tournament_fast(source, months=3, tier="top", leagueid=None, wait=False):
+    """Турнирная статистика без ожидания сети: (rows, total, pending).
+
+    Во время пика ждать нельзя: сбор статистики - несколько запросов к базе
+    OpenDota, каждый по секундам, а при её сбоях - по минутам с повторами.
+    Порядок: свежая памятка → устаревшая памятка (пересчёт в фоне) →
+    снимок из репозитория (пересчёт в фоне) → ничего, pending=True, и
+    страница дозапросит позже. wait=True - посчитать сейчас (вкладка
+    «Турниры», там пользователь готов подождать) и обновить памятку.
+    """
+    key = f"tournament/{int(months)}/{tier}/{int(leagueid or 0)}"
+
+    def compute():
+        rows, total = source.tournament_stats(months, tier, leagueid)
+        return {"rows": rows, "total": total}
+
+    if wait:
+        data = compute()
+        net.memo_write(key, data)
+        return data["rows"], data["total"], False
+
+    memo = net.memo_read(key, TOUR_FRESH)
+    if memo:
+        return memo["rows"], memo["total"], False
+    net.compute_in_background(key, compute)
+    stale = net.memo_read(key, TOUR_MAX_AGE)
+    if stale:
+        return stale["rows"], stale["total"], False
+    if not leagueid:
+        snap = (tournament_snapshot().get(tier) or {}).get(str(int(months)))
+        if snap:
+            return snap["rows"], snap["total"], False
+    return None, 0, True
+
+
 def tournament_table(source, months=3, tier="top", leagueid=None):
     """Турнирная статистика по героям с долями от числа матчей."""
-    rows, total = source.tournament_stats(months, tier, leagueid)
+    rows, total, _ = tournament_fast(source, months, tier, leagueid, wait=True)
     stats_by_id = {h["id"]: h for h in source.hero_stats()}
     out = []
     for r in rows:
@@ -1003,19 +1067,27 @@ class Handler(BaseHTTPRequestHandler):
                 # турнирная составляющая: вес выбирает пользователь,
                 # 0 - не учитывать. Если база турниров недоступна, подбор
                 # работает без неё и говорит об этом, а не падает.
+                # Во время пика ждать сеть нельзя: всё, что не лежит в кэше
+                # или снимке, считается в фоне, а подбор отдаётся сразу без
+                # этой составляющей с флагом pending - страница дозапросит.
                 tour_weight = float(data.get("tour_weight", scoring.W_TOUR))
-                tour, tour_note, tour_matches = None, None, 0
+                tour, tour_note, tour_matches, tour_pending = None, None, 0, False
                 if tour_weight > 0:
                     try:
-                        t_rows, tour_matches = src.tournament_stats(
-                            int(data.get("tour_months") or 3), "top")
-                        tour = scoring.tournament_strength(t_rows, tour_matches)
+                        t_rows, tour_matches, tour_pending = tournament_fast(
+                            src, int(data.get("tour_months") or 3), "top")
+                        if t_rows is not None:
+                            tour = scoring.tournament_strength(t_rows, tour_matches)
+                        else:
+                            tour_note = ("турнирная статистика собирается в фоне, "
+                                         "таблица обновится сама")
                     except Exception as e:  # noqa: BLE001
                         tour_note = f"турнирная статистика недоступна: {str(e)[:120]}"
                         tour_weight = 0.0
 
                 # личная составляющая: по аккаунту игрока, если он указан
                 personal, personal_info, personal_note = None, None, None
+                personal_pending = False
                 personal_weight = float(data.get("personal_weight", scoring.W_PERSONAL))
                 account = data.get("account")
                 if account and personal_weight > 0:
@@ -1024,12 +1096,21 @@ class Handler(BaseHTTPRequestHandler):
                         personal_note, personal_weight = err, 0.0
                     else:
                         try:
-                            ph = src.player_heroes(acc)
-                            wl = src.player_wl(acc) or {}
-                            total_games = int(wl.get("win") or 0) + int(wl.get("lose") or 0)
+                            ph = src.player_heroes(acc, fast=True)
+                            wl = src.player_wl(acc, fast=True)
+                            if ph is None or wl is None:
+                                # ещё не скачано - подбор без личной части
+                                personal_pending, personal_weight = True, 0.0
+                                personal_note = ("личная статистика подгружается, "
+                                                 "таблица обновится сама")
+                                total_games = -1
+                            else:
+                                total_games = int(wl.get("win") or 0) + int(wl.get("lose") or 0)
                             # пустой аккаунт отдаёт 127 строк с нулями, а не пустой
                             # список - проверять надо по общему числу игр
-                            if not total_games:
+                            if total_games == -1:
+                                pass
+                            elif not total_games:
                                 personal_note = (f"по аккаунту {acc} нет ни одной игры: "
                                                  "история матчей в Steam закрыта "
                                                  "(«Открытая история матчей») или ID не тот")
@@ -1073,6 +1154,8 @@ class Handler(BaseHTTPRequestHandler):
                     "tour_note": tour_note,
                     "personal_weight": personal_weight,
                     "personal_note": personal_note,
+                    # что-то ещё считается в фоне - страница повторит запрос
+                    "pending": bool(tour_pending or personal_pending),
                 })
 
             if url.path.startswith("/api/vision/"):
@@ -1112,6 +1195,56 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             return self._json({"error": str(e)}, 500)
+
+
+def has_console():
+    """Есть ли у процесса консоль. У exe, собранного без консоли, - нет."""
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        return bool(ctypes.windll.kernel32.GetConsoleWindow())
+    except Exception:  # noqa: BLE001
+        return True
+
+
+LOG_PATH = None
+
+
+def redirect_output_to_log():
+    """Exe без консоли: весь вывод - в файл рядом с exe.
+
+    Консоль убрана, потому что пользователю она мешает, но без вывода
+    приложение нельзя чинить: сегодняшнее «ничего не происходит» разобрали
+    только по тексту из консоли. Файл перезаписывается на каждом запуске -
+    в нём всегда текущая сессия.
+    """
+    global LOG_PATH
+    if not getattr(sys, "frozen", False) or has_console():
+        return None
+    path = os.path.join(os.path.dirname(sys.executable), "dota2-draft-helper.log")
+    try:
+        f = open(path, "w", encoding="utf-8", buffering=1)
+    except OSError:
+        return None
+    sys.stdout = f
+    sys.stderr = f
+    LOG_PATH = path
+    return path
+
+
+def message_box(text, title="Драфт-хелпер Dota 2", error=False):
+    """Окно сообщения Windows. Блокирует до нажатия ОК; вне Windows - print."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            MB_ICONERROR, MB_ICONINFORMATION, MB_TOPMOST = 0x10, 0x40, 0x40000
+            flags = (MB_ICONERROR if error else MB_ICONINFORMATION) | MB_TOPMOST
+            ctypes.windll.user32.MessageBoxW(None, text, title, flags)
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    print(text)
 
 
 def lower_priority():
@@ -1226,35 +1359,69 @@ def main():
             elif not sys.executable.isascii():
                 say("  Похоже, дело в кириллице в пути к приложению: перенесите "
                     "папку, например, в C:\\dota2-draft-helper")
-            say("  открываю в браузере. Ctrl+C — остановить.")
             webbrowser.open(url)
-            try:
-                server_thread.join()
-            except KeyboardInterrupt:
-                print("\nОстановлено.")
+            wait_in_browser_mode(httpd, server_thread, url, say,
+                                 reason=f"Окно не открылось: {type(e).__name__}: {str(e)[:160]}")
             return
 
-    say("Ctrl+C — остановить.")
     if not window.AVAILABLE and not args.no_browser and not args.browser:
         say(f"  ({window.requirements_hint()} - открываю в браузере)")
     if not args.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("\nОстановлено.")
+    if has_console() or args.no_browser:
+        say("Ctrl+C — остановить.")
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("\nОстановлено.")
+        return
+    server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    server_thread.start()
+    wait_in_browser_mode(httpd, server_thread, url, say)
+
+
+def wait_in_browser_mode(httpd, server_thread, url, say, reason=None):
+    """Ждать, пока пользователь не остановит приложение, работающее в браузере.
+
+    С консолью - Ctrl+C. Без консоли (exe собран без неё) остановить
+    процесс было бы нечем, кроме диспетчера задач, поэтому показываем окно
+    сообщения: приложение работает по такому-то адресу, ОК - остановить.
+    """
+    if has_console():
+        say("  открываю в браузере. Ctrl+C — остановить.")
+        try:
+            server_thread.join()
+        except KeyboardInterrupt:
+            print("\nОстановлено.")
+        return
+    say("  открываю в браузере; остановка - кнопкой ОК в окне сообщения.")
+    text = ((reason + "\n\n") if reason else "") + (
+        f"Приложение работает в браузере: {url}\n\n"
+        "Нажмите ОК, чтобы остановить приложение."
+        + (f"\n\nПодробности в файле {LOG_PATH}" if LOG_PATH else ""))
+    message_box(text)
+    httpd.shutdown()
+    print("\nОстановлено.")
 
 
 if __name__ == "__main__":
+    redirect_output_to_log()
     try:
         main()
     except Exception:  # noqa: BLE001
-        # В exe консоль закрывается вместе с процессом, и падение на старте
-        # выглядит как «ничего не произошло». Показываем ошибку и ждём.
-        traceback.print_exc()
+        # Падение на старте не должно выглядеть как «ничего не произошло»:
+        # с консолью - текст и ожидание Enter, без консоли - окно сообщения
+        # с концом трассировки и путём к логу.
+        trace = traceback.format_exc()
+        print(trace)
         if getattr(sys, "frozen", False):
-            try:
-                input("\nПриложение упало. Скопируйте текст выше и нажмите Enter…")
-            except EOFError:
-                pass
+            if has_console():
+                try:
+                    input("\nПриложение упало. Скопируйте текст выше и нажмите Enter…")
+                except EOFError:
+                    pass
+            else:
+                message_box("Приложение упало.\n\n" + trace[-1500:]
+                            + (f"\n\nПолный текст: {LOG_PATH}" if LOG_PATH else ""),
+                            error=True)
         sys.exit(1)

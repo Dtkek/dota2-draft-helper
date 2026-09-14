@@ -1,0 +1,65 @@
+# Обновление снимков данных в репозитории раз в неделю:
+#   app/data/stratz_fallback.json.gz      - матчапы, синергии, позиции STRATZ
+#   app/data/tournament_fallback.json.gz  - турнирная статистика OpenDota
+#
+# Зачем снимки: подбор во время пика не должен ждать сеть - ни STRATZ
+# (токен на пользователя, лимиты, привязка к IP), ни базу OpenDota
+# (секунды на запрос, минуты при сбоях). Со снимками подбор считается
+# мгновенно с первого запуска, свежее подтягивается в фоне.
+#
+# Недели у STRATZ начинаются в четверг, поэтому пятница: предыдущая
+# неделя уже закрыта. Токен STRATZ - секрет репозитория STRATZ_TOKEN
+# (Settings → Secrets and variables → Actions). После коммита сборка exe
+# запускается через workflow_dispatch: push от GITHUB_TOKEN другие
+# workflow не запускает, а dispatch - запускает.
+name: Снимки данных
+
+on:
+  schedule:
+    - cron: "0 6 * * 5"   # пятница, 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Снимок STRATZ
+        env:
+          STRATZ_TOKEN: ${{ secrets.STRATZ_TOKEN }}
+        run: python3 app/tools/update_stratz.py
+
+      - name: Снимок турнирной статистики
+        # база OpenDota временами не отвечает; один снимок из двух лучше,
+        # чем ни одного, поэтому шаг не роняет задание
+        continue-on-error: true
+        run: python3 app/tools/update_tournaments.py
+
+      - name: Закоммитить, если изменилось
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/data/stratz_fallback.json.gz app/data/tournament_fallback.json.gz
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "Снимки данных от $(date -u +%Y-%m-%d)"
+            git push
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Пересобрать exe со свежими снимками
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build-windows.yml --ref main

@@ -388,17 +388,28 @@ async function refreshRecommendations() {
     });
     if (token !== recToken) return;
     renderRecommendations(out, data);
+    // сервер отдал подбор сразу, а турнирную или личную часть считает
+    // в фоне - дозапросить, пока не досчитает (но не бесконечно)
+    if (data.pending && pendingRetries < 8) {
+      pendingRetries += 1;
+      setTimeout(() => { if (token === recToken) refreshRecommendations(); }, 4000);
+    } else if (!data.pending) {
+      pendingRetries = 0;
+    }
   } catch (e) {
     if (token === recToken) showError(out, e);
   }
 }
+let pendingRetries = 0;
 
 function renderRecommendations(out, data) {
   const rows = data.rows;
   out.innerHTML = '';
   if (data.note) out.appendChild(el('div', 'error', 'Внимание: ' + data.note));
-  if (data.tour_note) out.appendChild(el('div', 'error', data.tour_note));
-  if (data.personal_note) out.appendChild(el('div', 'error', data.personal_note));
+  // «считается в фоне» - не ошибка, показываем приглушённо
+  const noteCls = data.pending ? 'dim' : 'error';
+  if (data.tour_note) out.appendChild(el('div', noteCls, data.tour_note));
+  if (data.personal_note) out.appendChild(el('div', noteCls, data.personal_note));
   if (!rows.length) {
     out.appendChild(el('div', 'empty-hint', 'Ничего не подошло под фильтры.'));
     return;
