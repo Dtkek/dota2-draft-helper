@@ -17,6 +17,9 @@ __pycache__/
 .idea/
 .vscode/
 
+# личные настройки Claude Code на этой машине; общие - в .claude/settings.json
+.claude/settings.local.json
+
 # распакованные копии снимков: в репозитории только .gz
 app/data/*.json
 !app/data/positions.json
