@@ -1,11 +1,11 @@
 ---
-project_name: Dota 2 Draft Helper
+project_name: Pickline
 project_language: Russian
 main_website: [не применимо — локальное приложение]
 additional_links:
   - Приложение: projects/dota2_draft_helper/app/
   - Документация: projects/dota2_draft_helper/app/README.md
-  - Репозиторий и сборки exe: https://github.com/Dtkek/dota2-draft-helper (релиз latest)
+  - Репозиторий и сборки exe: https://github.com/Dtkek/pickline (релиз latest)
   - OpenDota API: https://docs.opendota.com
   - STRATZ API (второй источник матчапов): https://stratz.com/api
 emotions:
@@ -15,7 +15,7 @@ emotions:
 tone_of_voice: Прямой, фактологичный, без обещаний «гарантированной победы»
 ---
 
-# Dota 2 Draft Helper
+# Pickline
 
 **Краткое описание:** Локальное веб-приложение, которое подсказывает, каких героев брать против вражеского драфта. Считает преимущество по матчапам, показывает мету по рангам и разбирает профессиональные матчи. Работает на публичном API OpenDota, без зависимостей.
 

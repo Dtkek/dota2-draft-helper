@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Драфт-хелпер Dota 2
+title Pickline
 cd /d "%~dp0"
 
 rem Весь файл написан на goto, без блоков в круглых скобках. В cmd любая
@@ -21,7 +21,7 @@ echo.
 call :findproject
 echo.
 echo  Если проект ещё не скачан:
-echo   1. Открыть https://github.com/Dtkek/dota2-draft-helper
+echo   1. Открыть https://github.com/Dtkek/pickline
 echo   2. Зелёная кнопка "Code" - "Download ZIP"
 echo   3. Распаковать архив. Запускать прямо из архива нельзя.
 echo   4. Запустить start.bat из распакованной папки
@@ -99,7 +99,7 @@ if errorlevel 1 echo pywebview не установился - открою в б�
 
 :run
 echo.
-echo Запускаю драфт-хелпер. Браузер откроется сам.
+echo Запускаю Pickline. Браузер откроется сам.
 echo Чтобы закрыть - нажмите Ctrl+C или закройте это окно.
 echo.
 %PY% app\server.py

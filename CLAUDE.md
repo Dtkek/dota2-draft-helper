@@ -1,4 +1,4 @@
-# Dota 2 Draft Helper — правила для Claude Code
+# Pickline — правила для Claude Code
 
 Локальное приложение на Python (stdlib) + HTML/JS: подбор героев против
 вражеского драфта. Описание, архитектура и статус — в `app/README.md` и

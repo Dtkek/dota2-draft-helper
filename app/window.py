@@ -116,7 +116,7 @@ def _dotnet_runtime_workaround(log=None):
     for base in candidates:
         if not base or not base.isascii():
             continue
-        dst = os.path.join(base, "dota2-draft-helper", "pythonnet")
+        dst = os.path.join(base, "pickline", "pythonnet")
         try:
             shutil.copytree(src, os.path.join(dst, "runtime"), dirs_exist_ok=True)
         except OSError:
@@ -135,7 +135,7 @@ def _dotnet_runtime_workaround(log=None):
     return None
 
 
-def run(url, title="Драфт-хелпер Dota 2", on_top=False, on_closed=None, log=None):
+def run(url, title="Pickline", on_top=False, on_closed=None, log=None):
     """Открывает окно и блокирует до его закрытия. Только из главного потока:
     на macOS WebKit иначе не работает."""
     _dotnet_runtime_workaround(log)

@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title Диагностика драфт-хелпера
+title Диагностика Pickline
 cd /d "%~dp0"
 
 rem Написано на goto, без блоков в круглых скобках: см. пояснение в start.bat
@@ -18,7 +18,7 @@ echo.
 call :findproject
 echo.
 echo  Если проект ещё не скачан - возьмите ZIP:
-echo   https://github.com/Dtkek/dota2-draft-helper
+echo   https://github.com/Dtkek/pickline
 echo  и распакуйте, запускать прямо из архива нельзя.
 echo ================================================================
 echo.

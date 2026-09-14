@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Локальный веб-сервер драфт-хелпера.
+"""Локальный веб-сервер Pickline.
 
 Запуск:  python3 app/server.py
 Затем открыть http://127.0.0.1:8777 (браузер откроется сам).
@@ -118,7 +118,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-14.9"
+VERSION = "2026-09-14.10"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -1222,7 +1222,7 @@ def redirect_output_to_log():
     global LOG_PATH
     if not getattr(sys, "frozen", False) or has_console():
         return None
-    path = os.path.join(os.path.dirname(sys.executable), "dota2-draft-helper.log")
+    path = os.path.join(os.path.dirname(sys.executable), "pickline.log")
     try:
         f = open(path, "w", encoding="utf-8", buffering=1)
     except OSError:
@@ -1233,7 +1233,7 @@ def redirect_output_to_log():
     return path
 
 
-def message_box(text, title="Драфт-хелпер Dota 2", error=False):
+def message_box(text, title="Pickline", error=False):
     """Окно сообщения Windows. Блокирует до нажатия ОК; вне Windows - print."""
     if sys.platform == "win32":
         try:
@@ -1266,7 +1266,7 @@ def lower_priority():
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Драфт-хелпер для Dota 2")
+    ap = argparse.ArgumentParser(description="Pickline — подсказки по драфту Dota 2")
     ap.add_argument("--port", type=int, default=8777)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--no-browser", action="store_true",
@@ -1286,7 +1286,7 @@ def main():
         print(msg, flush=True)
 
     src = get_source()
-    say(f"Драфт-хелпер, версия {VERSION}. Источник данных: {src.name}.")
+    say(f"Pickline, версия {VERSION}. Источник данных: {src.name}.")
     say("  приоритет процесса понижен: игра важнее"
         if lower_priority() else "  приоритет процесса понизить не удалось")
     try:
@@ -1330,7 +1330,7 @@ def main():
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://{args.host}:{args.port}"
-    say(f"\nДрафт-хелпер запущен: {url}")
+    say(f"\nPickline запущен: {url}")
 
     # Собственное окно, если есть pywebview и не просили браузер. Сервер
     # уходит в поток, окно занимает главный поток (так требует macOS);
@@ -1358,7 +1358,7 @@ def main():
                     "распаковать заново и запустить.")
             elif not sys.executable.isascii():
                 say("  Похоже, дело в кириллице в пути к приложению: перенесите "
-                    "папку, например, в C:\\dota2-draft-helper")
+                    "папку, например, в C:\\pickline")
             webbrowser.open(url)
             wait_in_browser_mode(httpd, server_thread, url, say,
                                  reason=f"Окно не открылось: {type(e).__name__}: {str(e)[:160]}")

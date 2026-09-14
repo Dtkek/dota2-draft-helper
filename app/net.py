@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
-UA = "dota2-draft-helper/1.0 (personal use)"
+UA = "pickline/1.0 (personal use)"
 
 _ssl_context = None
 _use_curl = False
@@ -136,7 +136,7 @@ def get_json(url, ttl=3600, timeout=45, stale_ok=True):
     """Забирает JSON по url. ttl — сколько секунд кэш считается свежим.
 
     Если сеть недоступна, а в кэше есть просроченная копия, возвращается она
-    (stale_ok): для драфт-хелпера вчерашние винрейты лучше, чем ошибка.
+    (stale_ok): для Pickline вчерашние винрейты лучше, чем ошибка.
     На 429/5xx - одна повторная попытка через пару секунд.
     """
     global _use_curl

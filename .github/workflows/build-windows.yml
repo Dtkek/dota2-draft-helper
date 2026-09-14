@@ -3,8 +3,8 @@
 # ставить не надо - распаковать и запустить.
 #
 # Собирается на каждый push в main и обновляет релиз с тегом latest:
-# https://github.com/Dtkek/dota2-draft-helper/releases/tag/latest
-# Файл: dota2-draft-helper-windows.zip
+# https://github.com/Dtkek/pickline/releases/tag/latest
+# Файл: pickline-windows.zip
 name: Сборка для Windows
 
 on:
@@ -35,12 +35,12 @@ jobs:
         # скачанные портреты и конфиг GSI - при onefile они бы терялись
         # при каждом запуске (распаковка во временную папку).
         # --windowed: без чёрного окна консоли. Вывод при этом идёт в
-        # dota2-draft-helper.log рядом с exe, падение - в окно сообщения
+        # pickline.log рядом с exe, падение - в окно сообщения
         # (см. redirect_output_to_log и message_box в server.py).
         run: >
           pyinstaller --noconfirm --clean --onedir --windowed
           --icon app/icon.ico
-          --name dota2-draft-helper
+          --name pickline
           --paths app
           --add-data "app/web;web"
           --add-data "app/data;data"
@@ -63,18 +63,18 @@ jobs:
         # откат окна в браузер считается провалом.
         shell: pwsh
         run: |
-          $dir = Join-Path $env:RUNNER_TEMP "Рабочий стол\dota2-draft-helper"
-          Copy-Item -Recurse dist\dota2-draft-helper $dir
+          $dir = Join-Path $env:RUNNER_TEMP "Рабочий стол\pickline"
+          Copy-Item -Recurse dist\pickline $dir
           # ровно то, что делает проводник с файлами из скачанного архива:
           # без этого проверка гоняла «чистую» сборку и проблему не видела
           Get-ChildItem $dir -Recurse -File | ForEach-Object {
             Set-Content -Path $_.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
           }
-          # exe без консоли пишет вывод сам - в dota2-draft-helper.log рядом с собой.
+          # exe без консоли пишет вывод сам - в pickline.log рядом с собой.
           # -NoNewWindow: запуск через CreateProcess, а не ShellExecute - иначе
           # на помеченном exe всплывает предупреждение SmartScreen, на раннере
           # его некому нажать, и запуск отменяется («canceled by the user»)
-          $p = Start-Process -FilePath (Join-Path $dir "dota2-draft-helper.exe") -ArgumentList "--port","8791" -PassThru -NoNewWindow
+          $p = Start-Process -FilePath (Join-Path $dir "pickline.exe") -ArgumentList "--port","8791" -PassThru -NoNewWindow
           Start-Sleep -Seconds 15
           try {
             if ($p.HasExited) { throw "exe завершился с кодом $($p.ExitCode) до проверки" }
@@ -85,18 +85,18 @@ jobs:
           } finally {
             if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
             Start-Sleep -Seconds 1
-            Write-Host "--- dota2-draft-helper.log:"; Get-Content (Join-Path $dir "dota2-draft-helper.log") -ErrorAction SilentlyContinue
+            Write-Host "--- pickline.log:"; Get-Content (Join-Path $dir "pickline.log") -ErrorAction SilentlyContinue
           }
-          $log = Get-Content (Join-Path $dir "dota2-draft-helper.log") -Raw -ErrorAction SilentlyContinue
-          if (-not $log) { throw "exe не создал dota2-draft-helper.log - вывод без консоли не перенаправился" }
+          $log = Get-Content (Join-Path $dir "pickline.log") -Raw -ErrorAction SilentlyContinue
+          if (-not $log) { throw "exe не создал pickline.log - вывод без консоли не перенаправился" }
           if ($log -match "окно не открылось") { throw "окно pywebview не открылось, сработал откат в браузер - см. вывод выше" }
 
       - name: Архив
         shell: pwsh
         run: |
-          Copy-Item README.md dist\dota2-draft-helper\README.md -ErrorAction SilentlyContinue
-          Copy-Item app\README.md dist\dota2-draft-helper\README-приложение.md
-          Compress-Archive -Path dist\dota2-draft-helper -DestinationPath dota2-draft-helper-windows.zip
+          Copy-Item README.md dist\pickline\README.md -ErrorAction SilentlyContinue
+          Copy-Item app\README.md dist\pickline\README-приложение.md
+          Compress-Archive -Path dist\pickline -DestinationPath pickline-windows.zip
 
       # артефакт - запасная копия для запусков не с main; релиз ниже
       # прикладывает архив сам. Хранилище артефактов иногда отвечает 403
@@ -104,8 +104,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
-          name: dota2-draft-helper-windows
-          path: dota2-draft-helper-windows.zip
+          name: pickline-windows
+          path: pickline-windows.zip
 
       # релиз и на push, и на ручной запуск: через dispatch сборку
       # запускает обновление снимка STRATZ (update-snapshots.yml)
@@ -123,5 +123,5 @@ jobs:
           name: Последняя сборка
           body: |
             Автоматическая сборка из main (${{ github.sha }}).
-            Распаковать архив и запустить `dota2-draft-helper.exe` - Python не нужен.
-          files: dota2-draft-helper-windows.zip
+            Распаковать архив и запустить `pickline.exe` - Python не нужен.
+          files: pickline-windows.zip
