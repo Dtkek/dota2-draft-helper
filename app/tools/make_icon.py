@@ -3,15 +3,15 @@
 
 Запуск:  python3 app/tools/make_icon.py      (нужен Pillow: pip install pillow)
 
-Идея - «линия преимущества»: поле Radiant (зелёный) и поле Dire (красный)
-по диагонали, между ними оранжевый штрих - акцентный цвет интерфейса.
-Сверху - полоса драфта из пяти слотов, как в самой Dota: Radiant слева,
-Dire справа, текущий пик подсвечен. Цвета - из app/web/styles.css, чтобы
-иконка и окно выглядели одним целым.
+Идея - буквально «pick line», линия пиков: ломаная линия драфта идёт
+снизу вверх, на ней узлы-пики - зелёные свои, красные вражеские, - а
+последний, большой оранжевый со свечением, - ваш пик, момент решения.
+Линия растёт слева направо: преимущество набирается пик за пиком.
+Цвета - из app/web/styles.css, чтобы иконка и окно были одним целым.
 
-Рисуется в 8-кратном размере и уменьшается: так края ровные на любом
-размере. Детали (слоты, бевел линии) сделаны так, чтобы на 16 px они
-сходили на нет, не ломая основную форму: два поля и диагональ.
+Рисуется в 8-кратном размере и уменьшается: края ровные на любом размере.
+На 16-24 px мелкие узлы убираются - остаются линия и оранжевая точка,
+этого достаточно, чтобы узнать иконку в панели задач.
 """
 import os
 import sys
@@ -27,102 +27,87 @@ PNG = os.path.join(APP, "web", "icon.png")
 BG = (0x16, 0x1b, 0x22)
 BG_DARK = (0x0e, 0x11, 0x16)
 LINE = (0x2a, 0x32, 0x3d)
+MUTED = (0x8b, 0x98, 0xa8)
+TEXT = (0xe6, 0xed, 0xf3)
 ACCENT = (0xe8, 0x7a, 0x21)
-ACCENT_LIGHT = (0xff, 0xa8, 0x4e)
-ACCENT_DARK = (0x8a, 0x3e, 0x0a)
+ACCENT_LIGHT = (0xff, 0xb0, 0x5a)
 RADIANT = (0x3f, 0xb9, 0x50)
-RADIANT_LIGHT = (0x6f, 0xd8, 0x7c)
-RADIANT_DARK = (0x25, 0x7d, 0x35)
 DIRE = (0xe2, 0x54, 0x4a)
-DIRE_LIGHT = (0xf5, 0x82, 0x76)
-DIRE_DARK = (0x9e, 0x2e, 0x27)
 
 SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256]
 SUPER = 8
+
+# узлы линии в долях размера: (x, y, цвет). Последний - ваш пик.
+NODES = [
+    (0.20, 0.76, RADIANT),
+    (0.36, 0.62, DIRE),
+    (0.50, 0.66, RADIANT),
+    (0.63, 0.46, DIRE),
+    (0.79, 0.27, ACCENT),
+]
 
 
 def _lerp(a, b, t):
     return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))
 
 
-def _vertical_gradient(size, top, bottom):
-    """Вертикальный градиент как картинка RGBA."""
-    img = Image.new("RGBA", (size, size))
-    px = img.load()
-    for y in range(size):
-        c = _lerp(top, bottom, y / max(size - 1, 1))
-        for x in range(size):
-            px[x, y] = c + (255,)
-    return img
+def _radial_glow(size, center, radius, color, alpha):
+    """Мягкое круглое свечение цвета color с центром center."""
+    glow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    ImageDraw.Draw(glow).ellipse(
+        (center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius),
+        fill=color + (alpha,))
+    return glow.filter(ImageFilter.GaussianBlur(radius * 0.6))
 
 
 def render(size):
     s = size * SUPER
-    tiny = size <= 24  # на мелких размерах детали только мешают
+    tiny = size <= 24
 
-    # --- плитка: тёмная, чуть светлее к верху, тонкая рамка
+    # --- плитка: тёмная, чуть светлее сверху, тонкая рамка, лёгкий блик
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     r = int(s * 0.22)
-    tile = _vertical_gradient(s, _lerp(BG, LINE, 0.35), BG_DARK)
+    tile = Image.new("RGBA", (s, s))
+    px = tile.load()
+    for y in range(s):
+        c = _lerp(_lerp(BG, LINE, 0.3), BG_DARK, y / (s - 1))
+        for x in range(s):
+            px[x, y] = c + (255,)
     tile_mask = Image.new("L", (s, s), 0)
     ImageDraw.Draw(tile_mask).rounded_rectangle((0, 0, s - 1, s - 1), radius=r, fill=255)
     img.paste(tile, (0, 0), tile_mask)
+
+    pts = [(int(x * s), int(y * s)) for x, y, _ in NODES]
+    last = pts[-1]
+
+    # --- свечение вокруг последнего узла - под линией, чтобы не перекрывать её
+    img.alpha_composite(_radial_glow(s, last, int(s * 0.26), ACCENT, 120))
+
+    # --- линия: тёмная подложка для контраста и сама линия
     d = ImageDraw.Draw(img)
+    w = int(s * (0.075 if not tiny else 0.10))
+    d.line(pts, fill=BG_DARK, width=w + max(2, s // 40), joint="curve")
+    d.line(pts, fill=MUTED if not tiny else TEXT, width=w, joint="curve")
+
+    # --- узлы: свои и вражеские пики; на мелких размерах только последний
+    if not tiny:
+        rr = int(s * 0.055)
+        ring = max(2, s // 48)
+        for (x, y), (_, _, color) in zip(pts[:-1], NODES[:-1]):
+            d.ellipse((x - rr - ring, y - rr - ring, x + rr + ring, y + rr + ring), fill=BG_DARK)
+            d.ellipse((x - rr, y - rr, x + rr, y + rr), fill=color)
+
+    # --- ваш пик: большой оранжевый узел со светлой сердцевиной
+    R = int(s * (0.12 if not tiny else 0.15))
+    ring = max(2, s // 40)
+    x, y = last
+    d.ellipse((x - R - ring, y - R - ring, x + R + ring, y + R + ring), fill=BG_DARK)
+    d.ellipse((x - R, y - R, x + R, y + R), fill=ACCENT)
+    core = int(R * 0.45)
+    d.ellipse((x - core, y - core - R // 5, x + core, y + core - R // 5), fill=ACCENT_LIGHT)
+
+    # рамка поверх всего
     d.rounded_rectangle((0, 0, s - 1, s - 1), radius=r, outline=LINE, width=max(1, s // 48))
-    # внутренний блик по верхнему краю плитки
-    d.rounded_rectangle((s // 48, s // 48, s - 1 - s // 48, s - 1 - s // 48), radius=int(r * 0.9),
-                        outline=_lerp(LINE, (255, 255, 255), 0.12), width=max(1, s // 96))
-
-    # --- внутреннее поле: два треугольника с объёмом
-    pad = int(s * 0.15)
-    x0, y0, x1, y1 = pad, pad, s - pad, s - pad
-    field = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    green = _vertical_gradient(s, RADIANT_LIGHT, RADIANT_DARK)
-    red = _vertical_gradient(s, DIRE_LIGHT, DIRE_DARK)
-    gmask = Image.new("L", (s, s), 0)
-    ImageDraw.Draw(gmask).polygon([(x0, y0), (x1, y0), (x0, y1)], fill=255)   # верх-лево: Radiant
-    rmask = Image.new("L", (s, s), 0)
-    ImageDraw.Draw(rmask).polygon([(x1, y0), (x1, y1), (x0, y1)], fill=255)   # низ-право: Dire
-    field.paste(green, (0, 0), gmask)
-    field.paste(red, (0, 0), rmask)
-
-    fd = ImageDraw.Draw(field)
-    # тень под линией - глубина; сама линия; светлая сердцевина - свечение
-    w = int(s * 0.11)
-    off = max(2, s // 64)
-    fd.line([(x0 + off, y1 + off), (x1 + off, y0 + off)], fill=ACCENT_DARK, width=w)
-    fd.line([(x0, y1), (x1, y0)], fill=ACCENT, width=w)
-    if not tiny:
-        fd.line([(x0, y1), (x1, y0)], fill=ACCENT_LIGHT, width=max(1, w // 3))
-
-    # полоса драфта: пять слотов по верхнему краю, Radiant слева, Dire справа,
-    # средний - текущий пик. На мелких размерах не рисуем: сольётся в шум
-    if not tiny:
-        n = 5
-        gap = int(s * 0.025)
-        strip_h = int(s * 0.13)
-        inner_w = (x1 - x0) - gap * (n + 1)
-        slot_w = inner_w // n
-        top = y0 + gap
-        for i in range(n):
-            left = x0 + gap + i * (slot_w + gap)
-            box = (left, top, left + slot_w, top + strip_h)
-            if i == n // 2:
-                fd.rounded_rectangle(box, radius=gap, fill=ACCENT, outline=ACCENT_LIGHT,
-                                     width=max(1, s // 128))
-            else:
-                fd.rounded_rectangle(box, radius=gap, fill=BG_DARK + (170,),
-                                     outline=LINE + (220,), width=max(1, s // 128))
-
-    # маска поля со скруглением и мягкая внутренняя тень по краю
-    mask = Image.new("L", (s, s), 0)
-    ImageDraw.Draw(mask).rounded_rectangle((x0, y0, x1, y1), radius=int(r * 0.55), fill=255)
-    shadow = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).rounded_rectangle((x0, y0, x1, y1), radius=int(r * 0.55),
-                                             outline=(0, 0, 0, 140), width=max(2, s // 40))
-    shadow = shadow.filter(ImageFilter.GaussianBlur(max(1, s // 80)))
-    field.alpha_composite(shadow)
-    img.paste(field, (0, 0), mask)
 
     return img.resize((size, size), Image.LANCZOS)
 
