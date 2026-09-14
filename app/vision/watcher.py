@@ -13,12 +13,15 @@ from vision import capture, recognize
 
 
 class ScreenWatcher:
-    def __init__(self, hero_names=None, source=None, interval=2.0, monitor=1,
+    def __init__(self, hero_names=None, source=None, interval=3.0, monitor=1,
                  region=None):
         self.hero_names = hero_names or {}
         self.source = source
         self.recognizer = recognize.Recognizer(self.hero_names)
         self.interval = interval
+        # функция без аргументов: True, если сейчас сканировать не нужно
+        # (например, игра через GSI сообщила, что матч уже идёт)
+        self.pause_check = None
         self.monitor = monitor
         # по умолчанию верхняя половина экрана: там идёт драфт
         self.region = region or (0.0, 0.0, 1.0, 0.55)
@@ -219,35 +222,84 @@ class ScreenWatcher:
             scans=self._state.get("scans", 0) + 1,
         )
 
-    # как часто повторять полный поиск, даже если слежение идёт гладко.
-    # Без этого герои, выбранные после калибровки, не находились никогда:
-    # слежение смотрит только в уже известные прямоугольники.
-    RESCAN_EVERY = 6.0
+    # Страховочный полный поиск, даже если кадр «не менялся»: на случай,
+    # если детектор изменений что-то проглядел. Редкий, потому дешёвый.
+    SAFETY_RESCAN = 30.0
+
+    # Кадр считается изменившимся, если хотя бы такая доля пикселей
+    # уменьшенной копии сдвинулась по яркости заметно (больше PIXEL_DELTA).
+    # Именно доля, а не среднее: пять новых портретов в углу почти не двигают
+    # среднее по кадру, и первая версия проверки их пропускала.
+    CHANGE_FRACTION = 0.004
+    PIXEL_DELTA = 20
+
+    @staticmethod
+    def _thumb(frame, band=None):
+        """Крошечная серая копия для сравнения «изменилось ли что-то».
+
+        band - (y0, y1): после калибровки сравниваем только полосу
+        с портретами, а середину полосы (там таймер, тикающий каждую
+        секунду) вырезаем - иначе каждый тик считался бы изменением.
+        """
+        import cv2
+        g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if band:
+            y0, y1 = band
+            g = g[max(0, y0):max(y0 + 1, y1)].copy()
+            w = g.shape[1]
+            g[:, int(w * 0.42):int(w * 0.58)] = 0
+        return cv2.resize(g, (96, 54), interpolation=cv2.INTER_AREA).astype("float32")
 
     def _loop(self):
-        boxes = []
-        misses = 0
+        """Изменился кадр - ищем заново; не изменился - ничего не делаем.
+
+        Раньше здесь было слежение по известным прямоугольникам, и оно
+        создало дыру: изменение кадра «не по расписанию» уходило в слежение
+        (которое видит только старые места), а потом кадр был статичен,
+        и полный поиск не наступал никогда. Враги, выбравшие героев после
+        калибровки, терялись. Теперь единственный триггер поиска - изменение.
+        """
         last_full = 0.0
+        last_thumb = None
+        known_width = None
+        band = None
         while not self._stop.is_set():
             try:
+                # Если игра сама говорит, что драфт кончился и матч идёт,
+                # экран трогать незачем: ни захвата, ни поиска, ни нагрузки.
+                if self.pause_check and self.pause_check():
+                    self._set(mode="пауза: матч идёт, драфт закончен", last_error=None)
+                    self._stop.wait(self.interval)
+                    continue
+
                 frame = self._grab()
-                due = (time.time() - last_full) >= self.RESCAN_EVERY
-                if boxes and not due:
-                    found = self.recognizer.classify_boxes(frame, boxes)
-                    # если уверенно распознали меньше половины — картинка уехала
-                    if len(found) < max(1, len(boxes) // 2):
-                        misses += 1
-                    else:
-                        misses = 0
-                    self._apply(found, None, mode="слежение")
-                    if misses >= 2:
-                        boxes = []
-                        misses = 0
+                thumb = self._thumb(frame, band)
+                if last_thumb is None or last_thumb.shape != thumb.shape:
+                    changed = True
                 else:
-                    hits, width = self.recognizer.scan(frame)
-                    self._apply(hits, width, mode="калибровка")
-                    boxes = [h["box"] for h in hits]
+                    moved = (abs(thumb - last_thumb) > self.PIXEL_DELTA).mean()
+                    changed = float(moved) > self.CHANGE_FRACTION
+                safety_due = (time.time() - last_full) >= self.SAFETY_RESCAN
+
+                if changed or safety_due:
+                    # масштаб интерфейса за драфт не меняется: после первой
+                    # калибровки ищем только вокруг известной ширины портрета
+                    hits, width = self.recognizer.scan(frame, hint_width=known_width)
+                    if not hits and known_width:
+                        hits, width = self.recognizer.scan(frame)
+                    self._apply(hits, width, mode="поиск" if changed else "страховочный поиск")
+                    if hits:
+                        known_width = width
+                        tops = [h["box"][1] for h in hits]
+                        bottoms = [h["box"][1] + h["box"][3] for h in hits]
+                        pad = max(8, int((max(bottoms) - min(tops)) * 0.3))
+                        band = (min(tops) - pad, max(bottoms) + pad)
+                        # полоса поменялась - следующий кадр сравниваем уже по ней
+                        thumb = self._thumb(frame, band)
                     last_full = time.time()
+                else:
+                    self._set(mode="слежение: кадр без изменений", last_error=None)
+                last_thumb = thumb
                 self._set(last_error=None)
             except Exception as e:  # noqa: BLE001 — поток не должен умирать
                 self._set(last_error=str(e))

@@ -702,7 +702,7 @@ $('#gsi-install').addEventListener('click', async () => {
 });
 
 // ---------------------------------------------------------------- чтение экрана
-const vision = { timer: null, running: false, lastKey: '', lastState: null };
+const vision = { timer: null, running: false, lastKey: '', lastState: null, lastScans: 0 };
 
 async function visionBoot() {
   const box = $('#vision-status');
@@ -762,7 +762,7 @@ $('#vis-start').addEventListener('click', async () => {
     vision.running = true;
     renderVision(r.state);
     if (vision.timer) clearInterval(vision.timer);
-    vision.timer = setInterval(pollVision, 1200);
+    vision.timer = setInterval(pollVision, 2000);
   } catch (e) { showError($('#vision-out'), e); }
 });
 
@@ -900,7 +900,11 @@ function renderVision(vs) {
 
   if (vs.last_error) out.appendChild(el('div', 'error', vs.last_error));
   if (vs.frame_hint) out.appendChild(el('div', 'error', vs.frame_hint));
-  if (vs.scans) showFrame();
+  // превью перекачиваем только когда был новый снимок, а не каждый опрос
+  if (vs.scans && vs.scans !== vision.lastScans) {
+    vision.lastScans = vs.scans;
+    showFrame();
+  }
 
   const heroes = vs.heroes || [];
   if (!heroes.length) {

@@ -6,9 +6,16 @@
 
 Никаких зависимостей: только стандартная библиотека.
 """
+import os
+
+# Одно ядро под все вычисления - до импорта numpy и opencv, иначе они
+# уже подняли свои пулы потоков. Игре нужны ядра больше, чем нам.
+for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+             "NUMEXPR_NUM_THREADS", "OPENCV_FOR_THREADS_NUM"):
+    os.environ.setdefault(_var, "1")
+
 import argparse
 import json
-import os
 import sys
 import threading
 import traceback
@@ -28,6 +35,15 @@ _watcher = None
 _watcher_lock = threading.Lock()
 
 
+IN_GAME_STATES = {"DOTA_GAMERULES_STATE_PRE_GAME", "DOTA_GAMERULES_STATE_GAME_IN_PROGRESS",
+                  "DOTA_GAMERULES_STATE_POST_GAME"}
+
+
+def _gsi_says_in_game():
+    s = gsi.state()
+    return bool(s.get("alive")) and s.get("game_state") in IN_GAME_STATES
+
+
 def get_watcher():
     """Создаёт наблюдателя за экраном при первом обращении.
 
@@ -42,6 +58,8 @@ def get_watcher():
             names = {h["id"]: h.get("localized_name") for h in src.hero_stats()}
             # источник нужен наблюдателю, чтобы самому докачать портреты
             _watcher = ScreenWatcher(names, source=src)
+            # если игра на связи и матч уже идёт - экран не сканируем
+            _watcher.pause_check = _gsi_says_in_game
         return _watcher
 
 
@@ -91,7 +109,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-13.25"
+VERSION = "2026-09-13.26"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -840,6 +858,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": str(e)}, 500)
 
 
+def lower_priority():
+    """Уступаем процессор игре: приложению спешить некуда, а игре - есть.
+
+    На Windows - класс приоритета BELOW_NORMAL, на остальных - nice.
+    """
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            BELOW_NORMAL_PRIORITY_CLASS = 0x4000
+            handle = ctypes.windll.kernel32.GetCurrentProcess()
+            ctypes.windll.kernel32.SetPriorityClass(handle, BELOW_NORMAL_PRIORITY_CLASS)
+        else:
+            os.nice(5)
+        return True
+    except Exception:  # noqa: BLE001 — не критично
+        return False
+
+
 def main():
     ap = argparse.ArgumentParser(description="Драфт-хелпер для Dota 2")
     ap.add_argument("--port", type=int, default=8777)
@@ -857,6 +893,8 @@ def main():
 
     src = get_source()
     say(f"Драфт-хелпер, версия {VERSION}. Источник данных: {src.name}.")
+    say("  приоритет процесса понижен: игра важнее"
+        if lower_priority() else "  приоритет процесса понизить не удалось")
     try:
         heroes = src.hero_stats()
         if getattr(src, "using_fallback", False):
