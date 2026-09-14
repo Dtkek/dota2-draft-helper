@@ -118,7 +118,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-14.5"
+VERSION = "2026-09-14.6"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -1114,6 +1114,40 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": str(e)}, 500)
 
 
+def relaunch_from_ascii_path():
+    """Windows: перезапуск exe по короткому имени 8.3, если в пути есть
+    не-ASCII символы («Рабочий стол»).
+
+    pythonnet, на котором держится окно, отдаёт путь к Python.Runtime.dll
+    в .NET как ANSI-строку: кириллица превращается в мусор, DLL «не
+    находится», и окно падает с «Failed to resolve
+    Python.Runtime.Loader.Initialize». Короткое имя 8.3 всегда ASCII,
+    а PyInstaller берёт папку _internal от пути, которым запущен exe.
+    Родитель ждёт ребёнка, чтобы консоль не закрылась.
+    Возвращает код выхода ребёнка или None, если перезапуск не нужен.
+    """
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return None
+    exe = sys.executable
+    if exe.isascii() or os.environ.get("DRAFTHELPER_RELAUNCHED"):
+        return None
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(2048)
+        n = ctypes.windll.kernel32.GetShortPathNameW(exe, buf, 2048)
+        short = buf.value if 0 < n < 2048 else ""
+    except Exception:  # noqa: BLE001
+        short = ""
+    if not short or not short.isascii():
+        # короткие имена на диске выключены - остаётся только откат в браузер
+        return None
+    import subprocess
+    print(f"в пути есть кириллица, перезапускаюсь по короткому имени: {short}",
+          flush=True)
+    env = dict(os.environ, DRAFTHELPER_RELAUNCHED="1")
+    return subprocess.call([short] + sys.argv[1:], env=env)
+
+
 def lower_priority():
     """Уступаем процессор игре: приложению спешить некуда, а игре - есть.
 
@@ -1218,6 +1252,9 @@ def main():
             # на Windows окно может не открыться без WebView2 или .NET;
             # приложение от этого не должно умирать
             say(f"  окно не открылось: {type(e).__name__}: {str(e)[:200]}")
+            if not sys.executable.isascii():
+                say("  Похоже, дело в кириллице в пути к приложению: перенесите "
+                    "папку, например, в C:\\dota2-draft-helper")
             say("  открываю в браузере. Ctrl+C — остановить.")
             webbrowser.open(url)
             try:
@@ -1239,6 +1276,9 @@ def main():
 
 if __name__ == "__main__":
     try:
+        code = relaunch_from_ascii_path()
+        if code is not None:
+            sys.exit(code)
         main()
     except Exception:  # noqa: BLE001
         # В exe консоль закрывается вместе с процессом, и падение на старте

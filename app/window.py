@@ -25,19 +25,23 @@ def requirements_hint():
 
 
 class Api:
-    """Методы, доступные странице как window.pywebview.api.*"""
+    """Методы, доступные странице как window.pywebview.api.*
+
+    Атрибут окна - с подчёркиванием: pywebview отдаёт странице все публичные
+    атрибуты и пытался сериализовать само окно вместе с его native-объектом.
+    """
 
     def __init__(self):
-        self.window = None
+        self._window = None
 
     def set_on_top(self, flag):
         """Держать окно поверх остальных (для драфта поверх игры)."""
-        if self.window is not None:
-            self.window.on_top = bool(flag)
+        if self._window is not None:
+            self._window.on_top = bool(flag)
         return bool(flag)
 
     def get_on_top(self):
-        return bool(self.window.on_top) if self.window is not None else False
+        return bool(self._window.on_top) if self._window is not None else False
 
 
 def run(url, title="Драфт-хелпер Dota 2", on_top=False, on_closed=None):
@@ -49,7 +53,7 @@ def run(url, title="Драфт-хелпер Dota 2", on_top=False, on_closed=Non
         width=1320, height=900, min_size=(760, 520), on_top=on_top,
         text_select=True,
     )
-    api.window = win
+    api._window = win
     if on_closed is not None:
         win.events.closed += on_closed
     webview.start()
