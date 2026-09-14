@@ -71,7 +71,11 @@ jobs:
           Copy-Item app\README.md dist\dota2-draft-helper\README-приложение.md
           Compress-Archive -Path dist\dota2-draft-helper -DestinationPath dota2-draft-helper-windows.zip
 
+      # артефакт - запасная копия для запусков не с main; релиз ниже
+      # прикладывает архив сам. Хранилище артефактов иногда отвечает 403
+      # на финализацию - из-за этого один раз падала вся сборка
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: dota2-draft-helper-windows
           path: dota2-draft-helper-windows.zip
