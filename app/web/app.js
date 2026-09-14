@@ -473,6 +473,7 @@ function fillMyHeroSelect() {
 $('#my-hero').addEventListener('change', () => {
   setMyHero(Number($('#my-hero').value) || null, 'вручную');
 });
+$('#build-tier').addEventListener('change', () => loadBuild());
 
 function setMyHero(id, how) {
   if (me.heroId === id) return;
@@ -507,12 +508,105 @@ async function loadBuild(how) {
       hero: me.heroId,
       months: Math.min(Number($('#tour-period').value), 3),
       enemy: enemies.join(','),
+      tier: $('#build-tier').value,
     });
     const b = await api('/api/build?' + q);
     if (token !== me.buildToken) return;
     out.className = '';
     renderBuild(out, b, hero, how);
+    loadSkills(out, token);
   } catch (e) { if (token === me.buildToken) { out.className = ''; showError(out, e); } }
+}
+
+// прокачка и таланты грузятся отдельно: это ещё один запрос к базе,
+// и сборка не должна его ждать
+async function loadSkills(out, token) {
+  const box = el('div');
+  box.style.marginTop = '10px';
+  box.appendChild(el('div', 'loading', 'Считаю прокачку и таланты…'));
+  out.appendChild(box);
+  try {
+    const q = new URLSearchParams({
+      hero: me.heroId,
+      months: Math.min(Number($('#tour-period').value), 3),
+      tier: $('#build-tier').value,
+    });
+    const s = await api('/api/skills?' + q);
+    if (token !== me.buildToken) return;
+    box.innerHTML = '';
+    renderSkills(box, s);
+  } catch (e) {
+    if (token === me.buildToken) { box.innerHTML = ''; showError(box, e); }
+  }
+}
+
+// раздел «Способности» как во внутриигровом гайде: порядок прокачки
+// иконками по уровням и таланты слева-справа от уровня, выбранный подсвечен
+function renderSkills(box, s) {
+  box.appendChild(el('div', 'section-title', 'Способности'));
+  if (!s.games) {
+    box.appendChild(el('div', 'dim', 'Данных по прокачке за период нет.'));
+    return;
+  }
+  const sub = el('div', 'skills-sub');
+  sub.appendChild(el('span', '', 'Порядок способностей'));
+  sub.appendChild(el('span', 'dim', ` — по ${s.games} про-играм, доля игр с этой способностью на уровне`));
+  box.appendChild(sub);
+
+  const row = el('div', 'skill-row');
+  s.order.forEach((a) => {
+    const cell = el('div', 'skill');
+    cell.appendChild(el('div', 'skill-lvl', String(a.level)));
+    if (a.img) {
+      const img = el('img'); img.src = a.img; img.alt = a.dname; img.title = a.dname;
+      cell.appendChild(img);
+    } else {
+      cell.appendChild(el('div', 'skill-noimg', a.dname));
+    }
+    cell.appendChild(el('div', 'skill-share' + (a.share < 60 ? ' dim' : ''), a.share + '%'));
+    row.appendChild(cell);
+  });
+  box.appendChild(row);
+
+  if (!s.talents.length) return;
+  const sub2 = el('div', 'skills-sub');
+  sub2.appendChild(el('span', '', 'Таланты'));
+  sub2.appendChild(el('span', 'dim', ' — доля выбора среди игр, дошедших до уровня, и винрейт этих игр'));
+  box.appendChild(sub2);
+
+  const grid = el('div', 'talents');
+  [25, 20, 15, 10].forEach((tier) => {
+    const pair = s.talents.filter((x) => x.tier === tier);
+    if (!pair.length) return;
+    // в игре левый талант - второй в списке, правый - первый
+    const left = pair[1] || pair[0];
+    const right = pair[0];
+    const line = el('div', 'talent-row');
+    const cellFor = (t) => {
+      const cell = el('div', 'talent' + (t.picked && t.share >= 50 ? ' talent-top' : ''));
+      cell.appendChild(el('div', 'talent-name',
+        t.dname + (t.approx ? ' (число см. в игре)' : '')));
+      if (t.picked) {
+        const st = el('div', 'talent-stat');
+        st.appendChild(el('span', '', `${t.share}% выбор`));
+        st.appendChild(el('span', 'dim', ' · '));
+        st.appendChild(el('span', 'pos', `${t.winrate}% побед`));
+        cell.appendChild(st);
+      } else {
+        cell.appendChild(el('div', 'talent-stat dim', 'Не выбирался в этой выборке'));
+      }
+      return cell;
+    };
+    line.appendChild(cellFor(left));
+    const tierCell = el('div', 'talent-tier');
+    tierCell.appendChild(el('div', '', String(tier)));
+    // сколько игр дошло до уровня: 100% выбора на 8 играх - не то же, что на 120
+    tierCell.appendChild(el('div', 'talent-tier-n', `${right.tier_games} игр`));
+    line.appendChild(tierCell);
+    line.appendChild(cellFor(right));
+    grid.appendChild(line);
+  });
+  box.appendChild(grid);
 }
 
 function renderBuild(out, b, hero, how) {
@@ -522,11 +616,12 @@ function renderBuild(out, b, hero, how) {
   const title = el('span', '', (hero ? hero.name : '') + ' ');
   title.style.fontWeight = '600';
   head.appendChild(title);
+  const tierName = { top: 'Premium + Professional', premium: 'Premium', all: 'все турниры' }[b.tier] || b.tier;
   head.appendChild(el('span', 'dim',
     b.games
-      ? `— ${b.games} турнирных игр за ${b.months} мес, винрейт ${b.winrate}%` +
+      ? `— ${b.games} турнирных игр (${tierName}) за ${b.months} мес, винрейт ${b.winrate}%` +
         (how ? ` · герой определён: ${how}` : '')
-      : '— в турнирах за этот период герой не встречался'));
+      : `— в турнирах (${tierName}) за этот период герой не встречался`));
   out.appendChild(head);
   if (!b.games) return;
 
@@ -547,19 +642,22 @@ function renderBuild(out, b, hero, how) {
     out.appendChild(vsLine);
   }
 
+  // четыре ряда одного размера: подпись слева, иконки с минутой на бейдже,
+  // под каждой доля игр и винрейт с этим предметом
   const block = el('div', 'items');
-  const line = (title, nodes) => {
-    if (!nodes.length) return;
-    const row = el('div', 'items-row');
+  const line = (title, list, badge) => {
+    if (!list.length) return;
+    const row = el('div', 'items-row build-line');
     row.appendChild(el('span', 'dim items-title', title));
-    nodes.forEach((n) => row.appendChild(n));
+    list.forEach((it) => row.appendChild(buildItem(it, badge(it))));
     block.appendChild(row);
   };
-  line('старт', b.start.map((it) =>
-    itemIcon(it, it.count > 1 ? `×${it.count}` : `${it.share}%`)));
-  line('сборка', b.order.map((it) => itemIcon(it, `${it.minute}м`)));
-  line('ситуативно', b.situational.map((it) => itemIcon(it, `${it.share}%`)));
-  line('итог', b.final.map((it) => itemIcon(it, `${it.share}%`)));
+  const minuteBadge = (it) => it.minute_f === null || it.minute_f === undefined
+    ? '' : (it.minute_f < 10 ? it.minute_f.toFixed(1) : Math.round(it.minute_f)) + '′';
+  line('старт', b.start, (it) => it.count > 1 ? `×${it.count}` : '');
+  line('сборка', b.order, minuteBadge);
+  line('ситуативно', b.situational, minuteBadge);
+  line('итог', b.final, () => '');
   out.appendChild(block);
 
   // сдвиги: что против этого драфта берут иначе, чем обычно
@@ -597,8 +695,9 @@ function renderBuild(out, b, hero, how) {
 
   const legend = el('div', 'dim');
   legend.style.marginTop = '6px';
-  legend.textContent = 'Старт — куплено до рога хотя бы в 40% игр, число — сколько штук. ' +
-    'Сборка — предметы дороже 500 золота из ≥25% игр по медианной минуте первой покупки. ' +
+  legend.textContent = 'Под иконкой — доля игр с предметом и винрейт этих игр. ' +
+    'Старт — куплено до рога хотя бы в 40% игр, ×N — сколько штук. ' +
+    'Сборка — собранные предметы из ≥25% игр по медианной минуте первой покупки, части (Ogre Axe, Reaver) не показываются. ' +
     'Ситуативно — дорогие предметы из 10–25% игр. Итог — что чаще всего в инвентаре к концу. ' +
     'Игры против драфта взвешены по числу совпавших врагов: игра против трёх из них весит втрое больше, чем против одного.';
   out.appendChild(legend);
@@ -1343,6 +1442,23 @@ function renderProMatch(out, m) {
       card.appendChild(table);
       out.appendChild(card);
     });
+}
+
+// предмет в сборке: иконка с бейджем (минута или число штук), под ней
+// доля игр и винрейт с этим предметом
+function buildItem(it, badge) {
+  const card = el('div', 'build-item');
+  card.appendChild(itemIcon(it, badge || undefined));
+  const stat = el('div', 'build-stat');
+  stat.appendChild(el('span', '', `${it.share}%`));
+  if (it.winrate !== null && it.winrate !== undefined) {
+    stat.appendChild(el('span', it.winrate >= 50 ? 'pos' : 'neg', `${it.winrate}%`));
+  }
+  card.appendChild(stat);
+  card.title = `${it.dname}${it.cost ? ` — ${it.cost} зол.` : ''}: куплен в ${it.share}% игр` +
+    (it.winrate !== null && it.winrate !== undefined ? `, винрейт с ним ${it.winrate}%` : '') +
+    (badge ? `, ${badge.startsWith('×') ? badge.slice(1) + ' шт.' : 'медианная минута ' + badge}` : '');
+  return card;
 }
 
 function itemIcon(it, label) {

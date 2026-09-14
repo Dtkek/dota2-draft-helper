@@ -130,6 +130,13 @@
           <h2>Мой герой и сборка по про-матчам</h2>
           <div class="controls">
             <div><label>Мой герой</label><select id="my-hero"><option value="">— не выбран —</option></select></div>
+            <div><label>Турниры</label>
+              <select id="build-tier" title="Уровень турниров по классификации OpenDota">
+                <option value="top" selected>Premium + Professional</option>
+                <option value="premium">Только Premium</option>
+                <option value="all">Все турниры</option>
+              </select>
+            </div>
             <div><label>Игра сообщает</label><span id="gsi-status" class="dim">проверяю…</span></div>
             <button class="tab" id="gsi-install">Подключить игру</button>
             <button class="tab" id="gsi-check">Проверить подключение</button>

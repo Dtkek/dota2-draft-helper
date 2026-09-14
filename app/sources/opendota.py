@@ -33,6 +33,28 @@ fallback_date = None
 _matchups_cache = None
 matchups_date = None
 _items_cache = None
+_abilities_cache = None
+
+ABILITIES_FALLBACK = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "abilities_fallback.json.gz")
+
+
+def _load_abilities():
+    global _abilities_cache
+    if _abilities_cache is not None:
+        return _abilities_cache
+    try:
+        with gzip.open(ABILITIES_FALLBACK, "rt", encoding="utf-8") as f:
+            payload = json.load(f)
+        _abilities_cache = {
+            "ids": payload.get("ids") or {},
+            "heroes": payload.get("heroes") or {},
+            "abilities": payload.get("abilities") or {},
+        }
+    except (OSError, ValueError):
+        _abilities_cache = {"ids": {}, "heroes": {}, "abilities": {}}
+    return _abilities_cache
 
 
 def _load_items():
@@ -201,12 +223,48 @@ class OpenDotaSource(HeroSource):
         "all": ("premium", "professional", "excluded", "amateur"),
     }
 
+    def period_bound(self, months=3):
+        """Наименьший match_id за период - нижняя граница для запросов к базе.
+
+        У базы OpenDota нет индекса по start_time: условие «за 3 месяца»
+        перебирает всю историю, и даже count(*) по герою не укладывается
+        в их лимит 15 с. Номера матчей растут со временем, и по match_id
+        индекс есть: с условием match_id >= граница тот же запрос проходит
+        за 4-6 с (замер на Axe, Juggernaut, Invoker).
+
+        Точную границу база тоже ищет долго, поэтому в два шага: грубая
+        оценка по скорости роста номеров в /proMatches (за неделю, с
+        трёхкратным запасом), а с ней точный min(match_id) - 0.3 с.
+        """
+        months = int(months)
+        pro = [x for x in (self.pro_matches() or [])
+               if x.get("match_id") and x.get("start_time")]
+        if len(pro) < 2:
+            return 0
+        newest = max(pro, key=lambda x: x["start_time"])
+        oldest = min(pro, key=lambda x: x["start_time"])
+        span = max(newest["start_time"] - oldest["start_time"], 3600)
+        rate = (newest["match_id"] - oldest["match_id"]) / span
+        rough = int(newest["match_id"] - rate * months * 31 * 86400 * 3)
+        rows = _explorer(f"""
+            select min(match_id) as mid from matches
+            where match_id >= {max(rough, 0)}
+              and start_time > extract(epoch from now() - interval '{months} months')
+        """, ttl=TTL_TOURNAMENT).get("rows") or []
+        mid = rows[0].get("mid") if rows else None
+        return int(mid) if mid else max(rough, 0)
+
+    def _period_sql(self, months, alias="m"):
+        """Условие «матч за период» с границей по match_id."""
+        return (f"{alias}.match_id >= {self.period_bound(months)} and "
+                f"{alias}.start_time > extract(epoch from now() - interval '{int(months)} months')")
+
     def tournament_leagues(self, months=3):
         """Турниры за период: id, название, уровень, число матчей."""
         sql = f"""
         select l.leagueid, l.name, l.tier, count(*) as matches
         from matches m join leagues l on l.leagueid = m.leagueid
-        where m.start_time > extract(epoch from now() - interval '{int(months)} months')
+        where {self._period_sql(months)}
         group by l.leagueid, l.name, l.tier
         order by matches desc
         limit 60
@@ -226,7 +284,7 @@ class OpenDotaSource(HeroSource):
         with pro as (
           select m.match_id, m.radiant_win
           from matches m join leagues l on l.leagueid = m.leagueid
-          where m.start_time > extract(epoch from now() - interval '{int(months)} months')
+          where {self._period_sql(months)}
             and l.tier in ({tier_sql}) {league_sql}
         )
         select * from (
@@ -334,7 +392,8 @@ class OpenDotaSource(HeroSource):
         hid = int(hero_id)
         tiers = self.TIERS.get(tier, self.TIERS["top"])
         tier_sql = ", ".join(f"'{t}'" for t in tiers)
-        period = f"m.start_time > extract(epoch from now() - interval '{int(months)} months')"
+        bound = self.period_bound(months)
+        period = self._period_sql(months)
 
         games_cte = f"""
             g as (
@@ -344,7 +403,8 @@ class OpenDotaSource(HeroSource):
               from player_matches pm
               join matches m on m.match_id = pm.match_id
               join leagues l on l.leagueid = m.leagueid
-              where pm.hero_id = {hid} and {period} and l.tier in ({tier_sql})
+              where pm.match_id >= {bound} and pm.hero_id = {hid} and {period}
+                and l.tier in ({tier_sql})
             )"""
         enemy_ids = [int(e) for e in (enemy_ids or []) if int(e) != hid]
         if enemy_ids:
@@ -365,12 +425,12 @@ class OpenDotaSource(HeroSource):
             with {games_cte},
             {weight_cte},
             p as (
-              select gw.match_id, gw.weight, (e->>'key') as key, (e->>'time')::int as t
+              select gw.match_id, gw.weight, gw.won, (e->>'key') as key, (e->>'time')::int as t
               from gw, unnest(gw.purchase_log) e
               where gw.purchase_log is not null
             ),
             pk as (
-              select match_id, key, max(weight) as weight,
+              select match_id, key, max(weight) as weight, bool_or(won) as won,
                      min(t) filter (where t > 0) as first_time,
                      count(*) filter (where t <= 0) as start_cnt
               from p group by match_id, key
@@ -378,6 +438,7 @@ class OpenDotaSource(HeroSource):
             select key,
               count(*) as games,
               sum(weight) as wgames,
+              sum(weight) filter (where won) as wwins,
               sum(weight) filter (where start_cnt > 0) as wstart,
               avg(start_cnt) filter (where start_cnt > 0) as start_per_game,
               percentile_cont(0.5) within group (order by first_time) as median_first,
@@ -391,9 +452,10 @@ class OpenDotaSource(HeroSource):
             with {games_cte},
             {weight_cte}
             select item_id, sum(weight) as wgames,
+                   sum(weight) filter (where won) as wwins,
                    (select sum(weight) from gw) as total_weight
             from (select unnest(array[item_0, item_1, item_2, item_3, item_4, item_5])
-                         as item_id, weight from gw) t
+                         as item_id, weight, won from gw) t
             where item_id > 0 group by item_id order by wgames desc limit 20
         """, ttl=TTL_TOURNAMENT).get("rows") or []
         return purchases, final
@@ -411,6 +473,43 @@ class OpenDotaSource(HeroSource):
 
     def player_wl(self, account_id):
         return get_json(f"{API}/players/{int(account_id)}/wl", ttl=3600)
+
+    # --- прокачка и таланты -----------------------------------------------
+    def hero_skills(self, hero_id, months=3, tier="top"):
+        """Порядок прокачки героя в турнирных матчах: для каждой позиции
+        (первый апгрейд, второй, ...) - какие способности брали и сколько раз,
+        с победами. Таланты - те же способности, в массиве они на позициях
+        уровней 10/15/20/25. Ответ - около килобайта."""
+        hid = int(hero_id)
+        tiers = self.TIERS.get(tier, self.TIERS["top"])
+        tier_sql = ", ".join(f"'{t}'" for t in tiers)
+        bound = self.period_bound(months)
+        return _explorer(f"""
+            with g as (
+              select pm.ability_upgrades_arr as arr,
+                     ((pm.player_slot < 128) = m.radiant_win) as won
+              from player_matches pm
+              join matches m on m.match_id = pm.match_id
+              join leagues l on l.leagueid = m.leagueid
+              where pm.match_id >= {bound} and pm.hero_id = {hid}
+                and {self._period_sql(months)}
+                and l.tier in ({tier_sql})
+                and pm.ability_upgrades_arr is not null
+            ),
+            u as (
+              select lvl, ability_id, won
+              from g, unnest(g.arr) with ordinality as t(ability_id, lvl)
+            )
+            select lvl, ability_id, count(*) as n,
+                   sum(case when won then 1 else 0 end) as wins,
+                   (select count(*) from g) as games
+            from u where lvl <= 25
+            group by lvl, ability_id order by lvl, n desc
+        """, ttl=TTL_TOURNAMENT).get("rows") or []
+
+    def abilities(self):
+        """Справочники способностей из снимка: ids, heroes, abilities."""
+        return _load_abilities()
 
     # --- предметы ---------------------------------------------------------
     def items(self):

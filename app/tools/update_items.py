@@ -26,6 +26,19 @@ def main():
         capture_output=True, text=True, check=True)
     items = json.loads(out.stdout)
 
+    # «часть» - базовый предмет (сам ни из чего не собирается), который
+    # входит в состав другого: Ogre Axe, Reaver, Soul Booster. По метке qual
+    # это не определить: component стоит и на Blink Dagger, а у Soul Booster
+    # стоит epic. Blink - единственная базовая часть, которую носят как есть.
+    used_in = set()
+    for it in items.values():
+        if isinstance(it, dict):
+            used_in.update(c for c in (it.get("components") or []) if isinstance(c, str))
+    standalone = {"blink", "ghost"}
+    # промежуточные сборки, которые сами собираются из частей, но носить
+    # их как есть никто не будет - по данным их от Vanguard не отличить
+    intermediate = {"soul_booster"}
+
     slim = {}
     for name, it in items.items():
         if not isinstance(it, dict) or not it.get("dname"):
@@ -36,7 +49,11 @@ def main():
             "img": (it.get("img") or "").split("?")[0],
             "cost": it.get("cost"),
             "qual": it.get("qual"),
+            "part": name in intermediate or (
+                not it.get("components") and name in used_in and name not in standalone),
         }
+    parts = sorted(n for n, v in slim.items() if v["part"])
+    print(f"частей: {len(parts)}: {', '.join(parts)}")
 
     payload = {
         "_комментарий": "Урезанный справочник предметов OpenDota. "

@@ -109,7 +109,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-14.1"
+VERSION = "2026-09-14.2"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -270,6 +270,30 @@ def pro_matches(source, limit=40):
 # расходники в ленте сборки только шумят; стартовый закуп показываем целиком
 CONSUMABLE_QUALS = {"consumable", "consumable;laning"}
 
+# по имени, на случай если в справочнике у чего-то из этого нет метки
+CONSUMABLE_KEYS = {
+    "tango", "tango_single", "flask", "clarity", "faerie_fire", "enchanted_mango",
+    "ward_observer", "ward_sentry", "ward_dispenser", "smoke_of_deceit", "dust",
+    "tpscroll", "blood_grenade", "tome_of_knowledge", "cheese", "famango",
+    "great_famango", "greater_famango",
+}
+
+
+def is_consumable(key, qual):
+    return key in CONSUMABLE_KEYS or qual in CONSUMABLE_QUALS
+
+
+def is_build_item(key, it):
+    """Предмет, который стоит показывать в сборке: не расходник, не рецепт и
+    не часть другого предмета. Признак part считается при сборке снимка
+    справочника (см. tools/update_items.py): базовый предмет, входящий в
+    состав другого. По метке qual это не определить - component стоит
+    и на Blink Dagger."""
+    it = it or {}
+    if is_consumable(key, it.get("qual")) or key.startswith("recipe_"):
+        return False
+    return not it.get("part")
+
 
 def item_builds(player, items_by_name, items_by_id):
     """Предметы игрока: стартовый закуп, сборка по времени, итоговый инвентарь.
@@ -291,14 +315,15 @@ def item_builds(player, items_by_name, items_by_id):
     start = [info(e["key"]) for e in log if (e.get("time") or 0) <= 0]
 
     build = []
+    first_time = {}
     for e in log:
         t = e.get("time") or 0
+        if t > 0:
+            first_time.setdefault(e["key"], t)
         if t <= 0:
             continue
         it = items_by_name.get(e["key"]) or {}
-        if it.get("qual") in CONSUMABLE_QUALS or it.get("qual") == "component":
-            continue
-        if (it.get("cost") or 0) < 500:
+        if not is_build_item(e["key"], it):
             continue
         entry = info(e["key"])
         entry["minute"] = int(t // 60)
@@ -309,8 +334,13 @@ def item_builds(player, items_by_name, items_by_id):
         iid = player.get(slot)
         if iid:
             name = items_by_id.get(int(iid))
-            if name:
-                final.append(info(name))
+            if name and not is_consumable(name, (items_by_name.get(name) or {}).get("qual")):
+                entry = info(name)
+                t = first_time.get(name)
+                entry["minute"] = int(t // 60) if t else None
+                final.append(entry)
+    # итог - в порядке покупки; собранные без рецепта в закупах не значатся
+    final.sort(key=lambda x: (x["minute"] is None, x["minute"] or 0))
     neutral = None
     if player.get("item_neutral"):
         name = items_by_id.get(int(player["item_neutral"]))
@@ -401,10 +431,16 @@ def _build_from_rows(source, purchases, final, items, by_id):
     start, order, situational = [], [], []
     for r in purchases:
         e = info(r["key"])
-        share = float(r["wgames"] or 0) / tw
+        wg = float(r["wgames"] or 0)
+        share = wg / tw
         e["share"] = round(share * 100)
+        # винрейт игр, где предмет куплен: по нему видно, что реально тащит
+        e["winrate"] = round(float(r.get("wwins") or 0) / wg * 100) if wg else None
         e["minute"] = (int(float(r["median_first"]) // 60)
                        if r.get("median_first") is not None else None)
+        # ранние предметы различаются полуминутами: 2.0' и 5.5' - разные покупки
+        e["minute_f"] = (round(float(r["median_first"]) / 60, 1)
+                         if r.get("median_first") is not None else None)
         by_key[r["key"]] = e
 
         wstart = float(r["wstart"] or 0) / tw
@@ -416,7 +452,11 @@ def _build_from_rows(source, purchases, final, items, by_id):
 
         if e["minute"] is None:
             continue
-        if e["qual"] in CONSUMABLE_QUALS or e["qual"] == "component" or e["cost"] < 500:
+        # в сборке - только собранные предметы: части (Ogre Axe, Circlet)
+        # только шумят, они видны через то, во что собраны. Стартовый закуп
+        # показан отдельно (покупки до рога сюда не попадают - minute
+        # считается по покупкам после рога).
+        if not is_build_item(e["key"], items.get(e["key"])):
             continue
         if share >= 0.25:
             order.append(e)
@@ -433,8 +473,18 @@ def _build_from_rows(source, purchases, final, items, by_id):
         if not name:
             continue
         e = info(name)
-        e["share"] = round(float(r["wgames"]) / float(r["total_weight"] or 1) * 100)
+        # варды и недособранные части в инвентаре к концу игры - не сборка
+        if not is_build_item(name, items.get(name)):
+            continue
+        wg = float(r["wgames"] or 0)
+        e["share"] = round(wg / float(r["total_weight"] or 1) * 100)
+        e["winrate"] = round(float(r.get("wwins") or 0) / wg * 100) if wg else None
+        # минута покупки известна из закупов - по ней и сортируем итог
+        e["minute"] = (by_key.get(name) or {}).get("minute")
         final_items.append(e)
+    # итог - в порядке покупки, а не по частоте: собранные без рецепта
+    # предметы в закупах не встречаются, у них минуты нет - они в конце
+    final_items.sort(key=lambda x: (x["minute"] is None, x["minute"] or 0, -x["share"]))
 
     return {
         "games": total, "wins": wins,
@@ -445,12 +495,106 @@ def _build_from_rows(source, purchases, final, items, by_id):
     }
 
 
-def hero_build(source, hero_id, months=3, enemy_ids=None):
+TALENT_TIERS = {1: 10, 2: 15, 3: 20, 4: 25}
+
+
+def _talent_name(dname):
+    """У уникальных талантов справочник хранит шаблон без числа:
+    «+{s:bonus_heal_per_second} Living Armor Heal Per Second». Число
+    OpenDota не отдаёт; показываем название без него и помечаем."""
+    import re
+    if "{s:" not in (dname or ""):
+        return dname, False
+    # вырезаем знак, шаблон и единицу, приклеенную к нему: «-{s:value}s»
+    cleaned = re.sub(r"[+\-]?\{s:[^}]*\}[a-z%]*", "", dname)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" +-%")
+    return cleaned, True
+
+
+def hero_skills(source, hero_id, months=3, tier="top"):
+    """Прокачка и таланты героя по турнирным матчам.
+
+    Порядок - для каждой позиции апгрейда самая частая способность и доля
+    игр, где взяли именно её. Таланты по уровням 10/15/20/25: доля среди
+    игр, где на этом уровне взят какой-либо талант, и винрейт этих игр.
+    """
+    rows = source.hero_skills(hero_id, months, tier)
+    ab = source.abilities()
+    stats_by_id = {h["id"]: h for h in source.hero_stats()}
+    hero_name = (stats_by_id.get(hero_id) or {}).get("name")
+    hero_ab = ab["heroes"].get(hero_name) or {}
+    talent_names = {t["name"]: t.get("level") for t in hero_ab.get("talents", [])}
+    ids = ab["ids"]
+    abilities = ab["abilities"]
+
+    def info(ability_id):
+        name = ids.get(str(ability_id))
+        a = abilities.get(name) or {}
+        return {"id": ability_id, "name": name,
+                "dname": a.get("dname") or name or str(ability_id),
+                "img": CDN + a["img"] if a.get("img") else None,
+                "talent": name in talent_names}
+
+    if not rows:
+        return {"hero_id": hero_id, "games": 0}
+    games = int(rows[0]["games"]) or 1
+
+    by_lvl = {}
+    for r in rows:
+        by_lvl.setdefault(int(r["lvl"]), []).append(r)
+
+    order = []
+    for lvl in range(1, 19):
+        cands = [r for r in by_lvl.get(lvl, []) if ids.get(str(r["ability_id"])) not in talent_names]
+        if not cands:
+            continue
+        top = cands[0]
+        e = info(int(top["ability_id"]))
+        e["level"] = lvl
+        e["share"] = round(int(top["n"]) / games * 100)
+        order.append(e)
+
+    talent_stats = {}
+    for r in rows:
+        name = ids.get(str(r["ability_id"]))
+        if name in talent_names:
+            t = talent_stats.setdefault(name, [0, 0])
+            t[0] += int(r["n"])
+            t[1] += int(r["wins"])
+
+    # доля - от игр, где на этом уровне талант вообще взят: до 25-го уровня
+    # доживает малая часть игр, и доля от всех игр показывала бы не выбор
+    # между двумя талантами, а длину матчей
+    tier_total = {}
+    for name, level in talent_names.items():
+        tier = TALENT_TIERS.get(level, level)
+        tier_total[tier] = tier_total.get(tier, 0) + talent_stats.get(name, [0, 0])[0]
+
+    talents = []
+    for name, level in talent_names.items():
+        a = abilities.get(name) or {}
+        dname, approx = _talent_name(a.get("dname") or name)
+        n, w = talent_stats.get(name, [0, 0])
+        tier = TALENT_TIERS.get(level, level)
+        total = tier_total.get(tier) or 1
+        talents.append({
+            "name": name, "dname": dname, "approx": approx,
+            "tier": tier, "tier_games": tier_total.get(tier, 0),
+            "picked": n, "share": round(n / total * 100, 1),
+            "winrate": round(w / n * 100, 1) if n else None,
+        })
+    talents.sort(key=lambda t: t["tier"])
+
+    return {"hero_id": hero_id, "games": games, "order": order, "talents": talents}
+
+
+def hero_build(source, hero_id, months=3, enemy_ids=None, tier="top"):
     """Сборка героя по турнирным матчам: общая и против конкретного драфта.
 
     Стартовый закуп - предметы, купленные до рога хотя бы в 40% игр.
-    Порядок сборки - предметы дороже 500 золота из ≥25% игр по медианной
-    минуте первой покупки. Ситуативные - дорогие предметы из 10-25% игр.
+    Порядок сборки - собранные предметы (без частей и расходников) из ≥25%
+    игр по медианной минуте первой покупки. Ситуативные - дорогие предметы
+    из 10-25% игр. У каждого предмета - винрейт игр, где он куплен.
 
     Если переданы враги, считается вторая сборка - по играм против них -
     и сдвиги: какие предметы против этого драфта берут заметно чаще, реже,
@@ -460,21 +604,21 @@ def hero_build(source, hero_id, months=3, enemy_ids=None):
     items = source.items() or {}
     by_id = {it["id"]: name for name, it in items.items() if it.get("id")}
 
-    general = _build_from_rows(source, *source.hero_builds(hero_id, months), items, by_id)
+    general = _build_from_rows(source, *source.hero_builds(hero_id, months, tier), items, by_id)
     if not general:
         return {"hero_id": hero_id, "games": 0}
 
     enemy_ids = [int(e) for e in (enemy_ids or []) if int(e) != int(hero_id)]
     vs, shifts = None, []
     if enemy_ids:
-        vs = _build_from_rows(source, *source.hero_builds(hero_id, months, enemy_ids=enemy_ids),
+        vs = _build_from_rows(source, *source.hero_builds(hero_id, months, tier, enemy_ids=enemy_ids),
                               items, by_id)
         if vs:
             for key, ev in vs["by_key"].items():
                 eg = general["by_key"].get(key)
-                if not eg or ev["qual"] in CONSUMABLE_QUALS or ev["qual"] == "component":
+                if not eg or not is_build_item(key, items.get(key)):
                     continue
-                if ev["cost"] < 500 or max(ev["share"], eg["share"]) < 20:
+                if max(ev["share"], eg["share"]) < 20:
                     continue
                 d_share = ev["share"] - eg["share"]
                 d_min = ((ev["minute"] - eg["minute"])
@@ -493,6 +637,7 @@ def hero_build(source, hero_id, months=3, enemy_ids=None):
     out = {
         "hero_id": hero_id,
         "months": months,
+        "tier": tier,
         "games": general["games"],
         "wins": general["wins"],
         "winrate": general["winrate"],
@@ -719,6 +864,13 @@ class Handler(BaseHTTPRequestHandler):
                 if err:
                     return self._json({"error": err}, 400)
                 return self._json(player_summary(src, acc))
+            if url.path == "/api/skills":
+                hero = (q.get("hero") or [None])[0]
+                if not hero:
+                    return self._json({"error": "не передан герой"}, 400)
+                months = min(int((q.get("months") or ["3"])[0]), 3)
+                tier = (q.get("tier") or ["top"])[0]
+                return self._json(hero_skills(src, int(hero), months, tier))
             if url.path == "/api/build":
                 hero = (q.get("hero") or [None])[0]
                 if not hero:
@@ -726,7 +878,8 @@ class Handler(BaseHTTPRequestHandler):
                 # база не тянет период больше трёх месяцев - упирается в таймаут
                 months = min(int((q.get("months") or ["3"])[0]), 3)
                 enemies = [int(x) for x in (q.get("enemy") or [""])[0].split(",") if x.strip()]
-                return self._json(hero_build(src, int(hero), months, enemies))
+                tier = (q.get("tier") or ["top"])[0]
+                return self._json(hero_build(src, int(hero), months, enemies, tier))
             if url.path == "/api/tournaments/leagues":
                 months = int((q.get("months") or ["3"])[0])
                 return self._json({"leagues": src.tournament_leagues(months)})

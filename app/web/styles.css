@@ -192,6 +192,54 @@ tbody tr:hover { background: var(--panel-2); }
   background: rgba(0,0,0,.75); color: #fff; border-radius: 2px;
 }
 
+/* --- сборка своего героя: те же ряды, что в разборе матча, плюс
+   доля · винрейт под иконкой --- */
+.build-line { align-items: flex-start; gap: 6px; margin-bottom: 4px; }
+.build-line .items-title { padding-top: 8px; }
+.build-item { width: 46px; display: flex; flex-direction: column; align-items: center; }
+.build-item .item img { width: 44px; height: 32px; }
+.build-stat {
+  margin-top: 2px; font-size: 9px; line-height: 1.1; color: var(--muted);
+  display: flex; gap: 3px; white-space: nowrap;
+}
+.build-stat .pos { color: var(--good); }
+.build-stat .neg { color: var(--bad); }
+
+/* --- прокачка и таланты: как раздел «Способности» во внутриигровом гайде --- */
+.section-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px;
+  color: var(--muted); margin: 14px 0 8px; padding-top: 10px; border-top: 1px solid var(--line);
+}
+.skills-sub { font-weight: 600; font-size: 13px; margin: 10px 0 6px; }
+.skills-sub .dim { font-weight: 400; }
+.skill-row { display: flex; gap: 4px; flex-wrap: wrap; }
+.skill { display: flex; flex-direction: column; align-items: center; width: 40px; }
+.skill img { width: 36px; height: 36px; border-radius: 3px; border: 1px solid var(--line); background: #000; }
+.skill-noimg {
+  width: 36px; height: 36px; font-size: 9px; line-height: 1.1; overflow: hidden;
+  color: var(--muted); border: 1px solid var(--line); border-radius: 3px; text-align: center;
+}
+.skill-lvl { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+.skill-share { font-size: 11px; margin-top: 3px; }
+.talents { display: flex; flex-direction: column; gap: 3px; max-width: 700px; }
+.talent-row { display: grid; grid-template-columns: 1fr 44px 1fr; gap: 3px; align-items: stretch; }
+.talent {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 3px;
+  padding: 7px 10px; min-height: 30px;
+}
+.talent-name { font-size: 12px; }
+.talent-stat { font-size: 11px; margin-top: 3px; color: var(--muted); }
+.talent-stat .pos { color: var(--good); }
+/* талант, который берут в большинстве игр: золотистый фон, как в игре */
+.talent-top { border-color: #5a4b1a; background: #2a2412; }
+.talent-top .talent-name { color: #f2e6c3; }
+.talent-tier {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 13px; color: var(--text); background: var(--panel-2);
+  border-radius: 3px; border: 1px solid var(--line);
+}
+.talent-tier-n { font-weight: 400; font-size: 9px; color: var(--muted); white-space: nowrap; }
+
 .note {
   background: #1a1f16;
   border: 1px solid #2f3a24;
