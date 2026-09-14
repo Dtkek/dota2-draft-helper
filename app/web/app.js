@@ -167,6 +167,7 @@ async function boot() {
       .concat((data.positions || []).map((p) => [p.key, p.label]));
     fillSelect($('#position'), posOptions);
     fillSelect($('#meta-position'), posOptions);
+    fillSelect($('#tour-position'), posOptions);
 
     renderHeroGrid();
     renderSlots();
@@ -1292,7 +1293,9 @@ const tour = { rows: [], total: 0, leaguesFor: null };
 
 ['#tour-months', '#tour-tier', '#tour-league'].forEach((sel) =>
   $(sel).addEventListener('change', () => loadTournaments(true)));
+// сортировка и позиция - без похода на сервер: данные те же, меняется показ
 $('#tour-sort').addEventListener('change', () => renderTournaments());
+$('#tour-position').addEventListener('change', () => renderTournaments());
 
 async function loadTournamentLeagues() {
   const months = $('#tour-months').value;
@@ -1342,17 +1345,24 @@ async function loadTournaments(force) {
 function renderTournaments() {
   const out = $('#tour-out');
   const key = $('#tour-sort').value;
-  const rows = tour.rows.slice().sort((a, b) => {
-    const av = a[key] === null ? -1 : a[key];
-    const bv = b[key] === null ? -1 : b[key];
-    return bv - av;
-  });
+  // фильтр по позиции - по справочнику позиций из про-матчей
+  // (positions.json), он приходит вместе со списком героев
+  const position = Number($('#tour-position').value) || 0;
+  const rows = tour.rows
+    .filter((r) => !position || ((state.byId.get(r.id) || {}).positions || []).includes(position))
+    .sort((a, b) => {
+      const av = a[key] === null ? -1 : a[key];
+      const bv = b[key] === null ? -1 : b[key];
+      return bv - av;
+    });
   $('#tour-summary').textContent =
     `Матчей в выборке: ${tour.total}. Пик-рейт и бан-рейт — доля матчей, в которых ` +
-    'героя взяли или забанили; спорность — их сумма. Винрейт считается только по пикам.';
+    'героя взяли или забанили; спорность — их сумма. Винрейт считается только по пикам.' +
+    (position ? ' Позиции героев — по справочнику из про-матчей; один герой может стоять на нескольких.' : '');
   out.innerHTML = '';
   if (!rows.length) {
-    out.appendChild(el('div', 'empty-hint', 'За этот период матчей нет.'));
+    out.appendChild(el('div', 'empty-hint', position
+      ? 'На этой позиции за период никого не брали.' : 'За этот период матчей нет.'));
     return;
   }
   const table = el('table');
@@ -1370,7 +1380,12 @@ function renderTournaments() {
       const img = el('img'); img.src = r.img; img.alt = r.name; img.loading = 'lazy';
       cell.appendChild(img);
     }
-    cell.appendChild(el('span', '', r.name || String(r.id)));
+    const nameBox = el('div');
+    nameBox.appendChild(el('div', '', r.name || String(r.id)));
+    // позиции героя мелко под именем: видно, кто где играет, даже без фильтра
+    const pos = (state.byId.get(r.id) || {}).positions || [];
+    if (pos.length) nameBox.appendChild(el('div', 'dim', 'поз. ' + pos.join(', ')));
+    cell.appendChild(nameBox);
     td.appendChild(cell);
     tr.appendChild(td);
     tr.appendChild(el('td', 'num', r.contest_rate.toFixed(1) + '%'));
