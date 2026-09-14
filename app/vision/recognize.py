@@ -26,15 +26,37 @@ from vision import icons
 # размер, к которому приводится вырезанный фрагмент при классификации
 CELL_W, CELL_H = 64, 36
 
+# Сравнивается только верхняя часть портрета. На настоящем экране Dota
+# (проверено на скриншоте стадии выбора, 2026-09-14) нижние ~40% портрета
+# в верхней полоске закрыты плашкой ранга «Легенда V» и именем, и полный
+# эталон не находился вовсе: ноль героев из девяти. По верхней части те же
+# девять нашлись; 45% дало уверенность выше, чем 55% (Rubick 0.94 против
+# 0.87, Warlock 0.87 против 0.79) - плашка начинается раньше, чем кажется.
+# На экране пика, где портрет виден целиком, верхняя часть тоже видна -
+# способ работает на обоих.
+TOP_FRACTION = 0.45
+
 # ширины эталона (в пикселях рабочего кадра), которые перебираем при калибровке
 SCAN_WIDTHS = (40, 48, 56, 64, 72, 82, 94, 108, 124, 142, 162)
 
 # рабочая ширина кадра: больше не нужно, а скорость важнее
 WORK_WIDTH = 1280
 
-# грубый проход для поиска масштаба идёт на сильно уменьшенном кадре:
-# перебор масштабов стоит дорого, а для выбора масштаба такой детализации хватает
-COARSE_WIDTH = 440
+# Масштаб подбирается по верхней полосе кадра: портреты драфта во всех
+# экранах Dota стоят вверху, а перебор масштабов по всему кадру стоит
+# слишком дорого. Раньше перебор шёл по уменьшенной копии кадра (440 px),
+# но с верхней частью портрета (см. TOP_FRACTION) шаблон там вырождался
+# в 13×4 пикселя и «находился» где угодно - выигрывал самый мелкий
+# масштаб, и на настоящем экране не находилось ничего.
+SCALE_BAND = 0.4
+
+# Ожидаемая ширина портрета в долях ширины кадра: в верхней полоске Dota
+# при 16:9 это 0.064 (82 px на 1280). Масштабы перебираются от ближайших
+# к ожидаемому - обычно хватает первых пяти, остальные на случай другого
+# соотношения сторон или масштаба интерфейса.
+EXPECTED_REL_WIDTH = 0.064
+NEAR_FIRST = 5
+GOOD_ENOUGH = 0.72
 
 # по скольким лучшим совпадениям судим о качестве масштаба
 QUALITY_TOP = 5
@@ -50,6 +72,17 @@ MIN_REL_WIDTH = 0.030
 # постороннем экране вылезают одиночки и пары на 0.66–0.72.
 LONE_HIT_SCORE = 0.85
 PAIR_HIT_SCORE = 0.78
+
+# сколько разных мест на героя берётся из точного прохода (см. _match_all)
+PEAKS_PER_HERO = 3
+
+# со скольких уверенных героев ряд считается найденным и в его пустых
+# слотах идёт прицельный поиск (см. _fill_slots). Порог и отрыв от второго
+# кандидата подобраны по настоящему экрану: Slark 0.74 при втором 0.46,
+# Brewmaster 0.74 при 0.62, пустой слот - 0.68 при 0.68.
+ROW_RESCUE_MIN = 3
+SLOT_SCORE = 0.70
+SLOT_MARGIN = 0.08
 
 # Портрет героя — цветная картинка, а интерфейсы и текст почти серые.
 # Проверка насыщенности отсекает совпадения на постороннем содержимом,
@@ -85,6 +118,11 @@ def _normalize(vec):
     vec -= vec.mean()
     norm = np.linalg.norm(vec)
     return vec / norm if norm > 1e-6 else vec
+
+
+def _top_part(img):
+    """Верхняя часть портрета - та, что не закрыта плашкой ранга."""
+    return img[:max(4, int(round(img.shape[0] * TOP_FRACTION)))]
 
 
 def _cell_vector(img):
@@ -132,9 +170,10 @@ class Recognizer:
             if img is None:
                 continue
             # для поиска по кадру нужен серый шаблон (так быстрее),
-            # а для классификации — цветной: цвет отличает героя от интерфейса
+            # а для классификации — цветной: цвет отличает героя от интерфейса.
+            # Классификатор, как и поиск, работает по верхней части портрета
             self.templates[hero_id] = _to_gray(img)
-            rows.append(_cell_vector(img))
+            rows.append(_cell_vector(_top_part(img)))
             self.ids.append(hero_id)
         self.matrix = np.vstack(rows) if rows else None
 
@@ -171,19 +210,38 @@ class Recognizer:
         return out
 
     # --- медленный путь: поиск по всему кадру ------------------------------
-    def _match_all(self, work, tw):
-        """Лучшее совпадение каждого эталона при ширине tw: {hero_id: (score, loc)}."""
+    def _match_all(self, work, tw, peaks=1):
+        """Лучшие совпадения каждого эталона при ширине tw.
+
+        Возвращает ({hero_id: [(score, loc), ...] по убыванию}, высота).
+        Высота - это верхняя часть портрета 16:9, а не весь портрет
+        (см. TOP_FRACTION).
+
+        peaks > 1 - несколько несовпадающих мест на героя. Одного лучшего
+        мало: у Brewmaster на настоящем экране лучшее место оказалось на
+        модели героя в центре (0.77, мусор), а настоящий портрет в верхней
+        полоске шёл вторым (0.74) - и терялся.
+        """
         th = max(4, int(round(tw * 9 / 16)))
+        ph = max(4, int(round(th * TOP_FRACTION)))
         wh, ww = work.shape[:2]
-        if th >= wh or tw >= ww:
-            return None, th
+        if ph >= wh or tw >= ww:
+            return None, ph
         out = {}
         for hero_id, tmpl in self.templates.items():
-            small = cv2.resize(tmpl, (tw, th), interpolation=cv2.INTER_AREA)
+            small = cv2.resize(tmpl, (tw, th), interpolation=cv2.INTER_AREA)[:ph]
             res = cv2.matchTemplate(work, small, cv2.TM_CCOEFF_NORMED)
-            _, mx, _, loc = cv2.minMaxLoc(res)
-            out[hero_id] = (float(mx), loc)
-        return out, th
+            found = []
+            for _ in range(peaks):
+                _, mx, _, loc = cv2.minMaxLoc(res)
+                found.append((float(mx), loc))
+                if peaks == 1:
+                    break
+                # гасим окрестность найденного, чтобы следующий пик был другим местом
+                x0, y0 = max(0, loc[0] - tw // 2), max(0, loc[1] - ph // 2)
+                res[y0:loc[1] + ph // 2 + 1, x0:loc[0] + tw // 2 + 1] = -1.0
+            out[hero_id] = found
+        return out, ph
 
     @staticmethod
     def _quality(matches):
@@ -195,15 +253,16 @@ class Recognizer:
         """
         if not matches:
             return 0.0
-        top = sorted((s for s, _ in matches.values()), reverse=True)[:QUALITY_TOP]
+        top = sorted((found[0][0] for found in matches.values()), reverse=True)[:QUALITY_TOP]
         return sum(top) / len(top)
 
-    def scan(self, frame, threshold=0.70, widths=SCAN_WIDTHS, max_results=12,
+    def scan(self, frame, threshold=0.70, widths=SCAN_WIDTHS, max_results=30,
              verify_threshold=0.62, hint_width=None):
         """Ищет портреты героев по всему кадру в нескольких масштабах.
 
         Порядок работы:
-        1. грубый проход на уменьшенном кадре — определяем масштаб портретов;
+        1. подбор масштаба по верхней полосе кадра, от ожидаемой ширины
+           портрета к дальним;
         2. точный проход на рабочем кадре только в найденном масштабе;
         3. подавление пересечений;
         4. проверка каждой детекции быстрым классификатором — он почти не
@@ -235,24 +294,23 @@ class Recognizer:
                               interpolation=cv2.INTER_AREA), k
 
         work, k_work = resized(WORK_WIDTH)
-        coarse, k_coarse = resized(COARSE_WIDTH)
-        ratio = k_coarse / k_work if k_work else 1.0
+        band = work[:max(40, int(work.shape[0] * SCALE_BAND))]
 
-        def coarse_quality(tw_fine):
-            """Качество масштаба, посчитанное на уменьшенном кадре."""
-            tw_c = max(8, int(round(tw_fine * ratio)))
-            matches, _ = self._match_all(coarse, tw_c)
+        def band_quality(tw):
+            """Качество масштаба, посчитанное по верхней полосе кадра."""
+            matches, _ = self._match_all(band, tw)
             return self._quality(matches) if matches else -1.0
 
-        # --- 1. подбор масштаба: сетка, затем уточнение вокруг лучшего ---
-        # Весь перебор идёт на уменьшенном кадре: это единственный способ
-        # уложиться в секунды, полный кадр стоит примерно в восемь раз дороже.
+        # --- 1. подбор масштаба: от ожидаемого к дальним, затем уточнение ---
         min_width = MIN_REL_WIDTH * work.shape[1]
+        expected = EXPECTED_REL_WIDTH * work.shape[1]
+        candidates = sorted((tw for tw in widths if tw >= min_width),
+                            key=lambda tw: abs(tw - expected))
         best_q, best_w = -1.0, None
-        for tw in widths:
-            if tw < min_width:
-                continue
-            q = coarse_quality(tw)
+        for i, tw in enumerate(candidates):
+            if i >= NEAR_FIRST and best_q >= GOOD_ENOUGH:
+                break
+            q = band_quality(tw)
             if q > best_q:
                 best_q, best_w = q, tw
         if best_w is None:
@@ -267,19 +325,20 @@ class Recognizer:
             # уточнение уползало ниже него и возвращало ложные срабатывания
             if tw == best_w or tw < min_width:
                 continue
-            q = coarse_quality(tw)
+            q = band_quality(tw)
             if q > best_q:
                 best_q, best_w = q, tw
 
         # --- 2. один точный проход в найденном масштабе ---
-        matches, used_height = self._match_all(work, best_w)
+        matches, used_height = self._match_all(work, best_w, peaks=PEAKS_PER_HERO)
         if not matches:
             return [], None
         used_width = best_w
 
         hits = [{"hero_id": hid, "score": score,
                  "box": [loc[0], loc[1], used_width, used_height]}
-                for hid, (score, loc) in matches.items() if score >= threshold]
+                for hid, found in matches.items()
+                for score, loc in found if score >= threshold]
         if not hits:
             return [], None
 
@@ -318,7 +377,79 @@ class Recognizer:
                 verified = []
             elif len(verified) == 2 and mean_score < PAIR_HIT_SCORE:
                 verified = []
+
+        # --- 6. добор по слотам ряда ---
+        if len(verified) >= ROW_RESCUE_MIN:
+            verified = self._fill_slots(frame, gray_full, verified)
         return verified, int(used_width * inv)
+
+    def _fill_slots(self, frame, gray, verified):
+        """Дозаполняет пропуски в найденном ряду портретов.
+
+        Портреты в полоске стоят с одинаковым шагом. Когда несколько
+        соседей найдены уверенно, шаг известен, и в пустых слотах между
+        ними можно искать прицельно: сравнить окно слота со всеми
+        эталонами. Так возвращаются герои, у которых лучшее совпадение по
+        всему кадру пришлось на мусор (Brewmaster: 0.77 на модели героя
+        в центре против 0.74 в своём слоте), а в слоте они первые с большим
+        отрывом. Пустой слот (игрок ещё не выбрал героя) отсеивается
+        порогом и отрывом: там первые два эталона идут вровень (0.68/0.68).
+        """
+        row = sorted(verified, key=lambda h: h["box"][0])
+        xs = [h["box"][0] for h in row]
+        gaps = [b - a for a, b in zip(xs, xs[1:]) if b - a > 0]
+        if not gaps:
+            return verified
+        step = min(gaps)
+        near = [g for g in gaps if abs(g - step) <= step * 0.15]
+        step = sum(near) / len(near)
+        tw = max(h["box"][2] for h in row)
+        ph = max(h["box"][3] for h in row)
+        y = int(round(sum(h["box"][1] for h in row) / len(row)))
+
+        # кандидаты: пропуски между соседями кратной ширины и по паре слотов
+        # с краёв ряда. Промежуток между командами (таймер) шагу не кратен,
+        # поэтому не заполняется - это и нужно.
+        slots = []
+        for a, b in zip(xs, xs[1:]):
+            k = (b - a) / step
+            if 1.5 <= k <= 5.5 and abs(k - round(k)) <= 0.12:
+                for i in range(1, int(round(k))):
+                    slots.append(int(round(a + i * step)))
+        for i in (1, 2):
+            slots.append(int(round(xs[0] - i * step)))
+            slots.append(int(round(xs[-1] + i * step)))
+
+        fh, fw = gray.shape[:2]
+        th = max(4, int(round(tw * 9 / 16)))
+        smalls = {hid: cv2.resize(t, (tw, th), interpolation=cv2.INTER_AREA)[:ph]
+                  for hid, t in self.templates.items()}
+        pad = max(4, int(step * 0.1))
+        taken = {h["hero_id"] for h in verified}
+        out = list(verified)
+        for x in slots:
+            # ряд стоит у самого верха экрана, поэтому окно не отбрасываем,
+            # а обрезаем по кадру
+            x0, x1 = max(0, x - pad), min(fw, x + tw + pad)
+            y0, y1 = max(0, y - pad), min(fh, y + ph + pad)
+            if x1 - x0 < tw or y1 - y0 < ph:
+                continue
+            win = gray[y0:y1, x0:x1]
+            if saturation(frame[y0:y1, x0:x1]) < MIN_SATURATION:
+                continue
+            best = []
+            for hid, s in smalls.items():
+                res = cv2.matchTemplate(win, s, cv2.TM_CCOEFF_NORMED)
+                _, mx, _, loc = cv2.minMaxLoc(res)
+                best.append((float(mx), hid, loc))
+            best.sort(reverse=True)
+            score, hid, loc = best[0]
+            if hid in taken or score < SLOT_SCORE or score - best[1][0] < SLOT_MARGIN:
+                continue
+            taken.add(hid)
+            out.append({"hero_id": hid, "name": self.name(hid), "score": round(score, 3),
+                        "box": [x0 + loc[0], y0 + loc[1], tw, ph]})
+        return out
 
 
 def self_test(recognizer, count=5, tile_w=110, screen=(1920, 594)):
