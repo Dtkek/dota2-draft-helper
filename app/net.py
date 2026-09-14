@@ -116,6 +116,15 @@ def get_json(url, ttl=3600, timeout=45, stale_ok=True):
     raise RuntimeError(f"не удалось получить {url}: {error}")
 
 
+def forget(url):
+    """Удаляет из кэша один ответ - когда выяснилось, что он был с ошибкой."""
+    try:
+        os.remove(_cache_path(url))
+        return True
+    except OSError:
+        return False
+
+
 def cached(url, ttl=3600):
     """Отдаёт данные из кэша, если они свежие. В сеть не ходит.
 

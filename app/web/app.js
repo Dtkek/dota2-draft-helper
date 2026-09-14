@@ -312,6 +312,12 @@ function renderSlots() {
 
 let recToken = 0;
 async function refreshRecommendations() {
+  // сборка зависит от врагов: поменялся драфт - пересчитать и её
+  const enemyKey = state.draft.enemy.slice().sort().join(',');
+  if (me.heroId && enemyKey !== me.lastEnemyKey) {
+    me.lastEnemyKey = enemyKey;
+    loadBuild();
+  }
   const out = $('#rec-out');
   if (!state.draft.enemy.length) {
     out.innerHTML = '<div class="empty-hint">Выберите хотя бы одного героя противника.</div>';
@@ -449,7 +455,7 @@ function renderRecommendations(out, data) {
 }
 
 // ---------------------------------------------------------------- мой герой и сборка
-const me = { heroId: null, gsiTimer: null, gsiHero: null, gsiTeam: null };
+const me = { heroId: null, gsiTimer: null, gsiHero: null, gsiTeam: null, buildToken: 0 };
 
 function fillMyHeroSelect() {
   const sel = $('#my-hero');
@@ -471,6 +477,7 @@ $('#my-hero').addEventListener('change', () => {
 function setMyHero(id, how) {
   if (me.heroId === id) return;
   me.heroId = id;
+  me.lastEnemyKey = state.draft.enemy.slice().sort().join(',');
   $('#my-hero').value = id ? String(id) : '';
   // свой герой - это и союзник в драфте
   if (id && !usedIds().has(id) && state.draft.ally.length < 5) {
@@ -490,13 +497,22 @@ async function loadBuild(how) {
     return;
   }
   const hero = state.byId.get(me.heroId);
+  const enemies = state.draft.enemy.filter((id) => id !== me.heroId);
   out.className = 'loading';
-  out.textContent = `Собираю сборку ${hero ? hero.name : ''} по турнирным матчам…`;
+  out.textContent = `Собираю сборку ${hero ? hero.name : ''} по турнирным матчам` +
+    (enemies.length ? ' и отдельно против этого драфта' : '') + '…';
+  const token = ++me.buildToken;
   try {
-    const b = await api(`/api/build?hero=${me.heroId}&months=${$('#tour-period').value}`);
+    const q = new URLSearchParams({
+      hero: me.heroId,
+      months: Math.min(Number($('#tour-period').value), 3),
+      enemy: enemies.join(','),
+    });
+    const b = await api('/api/build?' + q);
+    if (token !== me.buildToken) return;
     out.className = '';
     renderBuild(out, b, hero, how);
-  } catch (e) { out.className = ''; showError(out, e); }
+  } catch (e) { if (token === me.buildToken) { out.className = ''; showError(out, e); } }
 }
 
 function renderBuild(out, b, hero, how) {
@@ -514,6 +530,23 @@ function renderBuild(out, b, hero, how) {
   out.appendChild(head);
   if (!b.games) return;
 
+  // против конкретного драфта: сколько игр и по чему считается показ
+  if (b.vs) {
+    const names = b.vs.enemy_ids.map((id) => (state.byId.get(id) || {}).name || id);
+    const vsLine = el('div', b.vs.used ? 'note' : 'dim');
+    vsLine.style.marginBottom = '8px';
+    if (b.vs.games) {
+      vsLine.textContent = `Против этого драфта (${names.join(', ')}): ${b.vs.games} про-игр ` +
+        `с хотя бы одним из них, винрейт ${b.vs.winrate}%. ` +
+        (b.vs.used
+          ? 'Сборка ниже — именно по этим играм.'
+          : `Мало для отдельной сборки (нужно ${15}) — ниже общая, а сдвиги показаны как подсказка.`);
+    } else {
+      vsLine.textContent = `Против этого драфта (${names.join(', ')}) про-игр за период нет — ниже общая сборка.`;
+    }
+    out.appendChild(vsLine);
+  }
+
   const block = el('div', 'items');
   const line = (title, nodes) => {
     if (!nodes.length) return;
@@ -529,11 +562,45 @@ function renderBuild(out, b, hero, how) {
   line('итог', b.final.map((it) => itemIcon(it, `${it.share}%`)));
   out.appendChild(block);
 
+  // сдвиги: что против этого драфта берут иначе, чем обычно
+  if (b.vs && b.vs.shifts && b.vs.shifts.length) {
+    const sh = el('div');
+    sh.style.marginTop = '8px';
+    sh.appendChild(el('div', 'dim', 'Что против этого драфта берут иначе, чем обычно:'));
+    const table = el('table');
+    table.innerHTML = '<thead><tr><th>Предмет</th><th class="num">Обычно</th>' +
+      '<th class="num">Против них</th><th class="num">Сдвиг</th></tr></thead>';
+    const tb = el('tbody');
+    b.vs.shifts.forEach((s) => {
+      const tr = el('tr');
+      const td = el('td');
+      const cell = el('div', 'hero-cell');
+      cell.appendChild(itemIcon(s));
+      cell.appendChild(el('span', '', s.dname));
+      td.appendChild(cell);
+      tr.appendChild(td);
+      tr.appendChild(el('td', 'num dim',
+        `${s.general_share}%` + (s.general_minute !== null ? ` · ${s.general_minute} мин` : '')));
+      tr.appendChild(el('td', 'num',
+        `${s.share}%` + (s.minute !== null ? ` · ${s.minute} мин` : '')));
+      const parts = [];
+      if (Math.abs(s.d_share) >= 8) parts.push((s.d_share > 0 ? 'чаще на ' : 'реже на ') + Math.abs(s.d_share) + ' п.п.');
+      if (Math.abs(s.d_minute) >= 3) parts.push((s.d_minute < 0 ? 'раньше на ' : 'позже на ') + Math.abs(s.d_minute) + ' мин');
+      const good = s.d_share > 0 || s.d_minute < 0;
+      tr.appendChild(el('td', 'num ' + (good ? 'pos' : 'neg'), parts.join(', ')));
+      tb.appendChild(tr);
+    });
+    table.appendChild(tb);
+    sh.appendChild(table);
+    out.appendChild(sh);
+  }
+
   const legend = el('div', 'dim');
   legend.style.marginTop = '6px';
   legend.textContent = 'Старт — куплено до рога хотя бы в 40% игр, число — сколько штук. ' +
-    'Сборка — предметы дороже 500 золота из ≥25% игр по медианной минуте покупки. ' +
-    'Ситуативно — дорогие предметы из 10–25% игр. Итог — что чаще всего в инвентаре к концу.';
+    'Сборка — предметы дороже 500 золота из ≥25% игр по медианной минуте первой покупки. ' +
+    'Ситуативно — дорогие предметы из 10–25% игр. Итог — что чаще всего в инвентаре к концу. ' +
+    'Игры против драфта взвешены по числу совпавших врагов: игра против трёх из них весит втрое больше, чем против одного.';
   out.appendChild(legend);
 }
 

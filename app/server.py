@@ -109,7 +109,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-13.26"
+VERSION = "2026-09-14.1"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -378,18 +378,13 @@ def player_summary(source, account_id):
     }
 
 
-def hero_build(source, hero_id, months=3):
-    """Рекомендуемая сборка героя по турнирным матчам.
+# меньше стольких игр против этого драфта - показываем общую сборку,
+# а условную - только как подсказку о сдвигах
+MIN_VS_GAMES = 15
 
-    Стартовый закуп - предметы, купленные до рога хотя бы в 40% игр,
-    с числом штук. Порядок сборки - предметы дороже 500 золота, купленные
-    хотя бы в четверти игр, по медианной минуте покупки. Ситуативные -
-    дорогие предметы из 10-25% игр. Итог - что чаще всего в инвентаре.
-    """
-    purchases, final = source.hero_builds(hero_id, months)
-    items = source.items() or {}
-    by_id = {it["id"]: name for name, it in items.items() if it.get("id")}
 
+def _build_from_rows(source, purchases, final, items, by_id):
+    """Разбирает строки из базы в стартовый закуп, порядок, ситуативные, итог."""
     def info(name):
         it = items.get(name) or {}
         return {"key": name, "dname": it.get("dname") or name,
@@ -397,36 +392,40 @@ def hero_build(source, hero_id, months=3):
                 "cost": it.get("cost") or 0, "qual": it.get("qual")}
 
     if not purchases:
-        return {"hero_id": hero_id, "games": 0}
+        return None
     total = int(purchases[0]["total_games"]) or 1
+    tw = float(purchases[0]["total_weight"] or total) or 1.0
     wins = int(purchases[0]["wins"] or 0)
 
-    start = []
+    by_key = {}
+    start, order, situational = [], [], []
     for r in purchases:
-        sg = int(r["start_games"] or 0)
-        if sg / total >= 0.4:
-            e = info(r["key"])
-            e["share"] = round(sg / total * 100)
-            e["count"] = round(float(r["start_per_game"] or 1))
-            start.append(e)
-    start.sort(key=lambda e: -e["share"])
-
-    order, situational = [], []
-    for r in purchases:
-        if not r["median_time"]:
-            continue
         e = info(r["key"])
+        share = float(r["wgames"] or 0) / tw
+        e["share"] = round(share * 100)
+        e["minute"] = (int(float(r["median_first"]) // 60)
+                       if r.get("median_first") is not None else None)
+        by_key[r["key"]] = e
+
+        wstart = float(r["wstart"] or 0) / tw
+        if wstart >= 0.4:
+            s = dict(e)
+            s["share"] = round(wstart * 100)
+            s["count"] = round(float(r["start_per_game"] or 1))
+            start.append(s)
+
+        if e["minute"] is None:
+            continue
         if e["qual"] in CONSUMABLE_QUALS or e["qual"] == "component" or e["cost"] < 500:
             continue
-        share = int(r["games"]) / total
-        e["share"] = round(share * 100)
-        e["minute"] = int(float(r["median_time"]) // 60)
         if share >= 0.25:
             order.append(e)
         elif share >= 0.10 and e["cost"] >= 1500:
             situational.append(e)
-    order.sort(key=lambda e: e["minute"])
-    situational.sort(key=lambda e: -e["share"])
+
+    start.sort(key=lambda x: -x["share"])
+    order.sort(key=lambda x: x["minute"])
+    situational.sort(key=lambda x: -x["share"])
 
     final_items = []
     for r in final:
@@ -434,20 +433,82 @@ def hero_build(source, hero_id, months=3):
         if not name:
             continue
         e = info(name)
-        e["share"] = round(int(r["games"]) / int(r["total"]) * 100)
+        e["share"] = round(float(r["wgames"]) / float(r["total_weight"] or 1) * 100)
         final_items.append(e)
 
     return {
-        "hero_id": hero_id,
-        "games": total,
-        "wins": wins,
+        "games": total, "wins": wins,
         "winrate": round(wins / total * 100, 1),
-        "months": months,
-        "start": start,
-        "order": order,
-        "situational": situational[:8],
-        "final": final_items[:10],
+        "start": start, "order": order,
+        "situational": situational[:8], "final": final_items[:10],
+        "by_key": by_key,
     }
+
+
+def hero_build(source, hero_id, months=3, enemy_ids=None):
+    """Сборка героя по турнирным матчам: общая и против конкретного драфта.
+
+    Стартовый закуп - предметы, купленные до рога хотя бы в 40% игр.
+    Порядок сборки - предметы дороже 500 золота из ≥25% игр по медианной
+    минуте первой покупки. Ситуативные - дорогие предметы из 10-25% игр.
+
+    Если переданы враги, считается вторая сборка - по играм против них -
+    и сдвиги: какие предметы против этого драфта берут заметно чаще, реже,
+    раньше или позже. Основной показ - условная сборка, если по ней хватает
+    игр; иначе общая, а сдвиги остаются подсказкой.
+    """
+    items = source.items() or {}
+    by_id = {it["id"]: name for name, it in items.items() if it.get("id")}
+
+    general = _build_from_rows(source, *source.hero_builds(hero_id, months), items, by_id)
+    if not general:
+        return {"hero_id": hero_id, "games": 0}
+
+    enemy_ids = [int(e) for e in (enemy_ids or []) if int(e) != int(hero_id)]
+    vs, shifts = None, []
+    if enemy_ids:
+        vs = _build_from_rows(source, *source.hero_builds(hero_id, months, enemy_ids=enemy_ids),
+                              items, by_id)
+        if vs:
+            for key, ev in vs["by_key"].items():
+                eg = general["by_key"].get(key)
+                if not eg or ev["qual"] in CONSUMABLE_QUALS or ev["qual"] == "component":
+                    continue
+                if ev["cost"] < 500 or max(ev["share"], eg["share"]) < 20:
+                    continue
+                d_share = ev["share"] - eg["share"]
+                d_min = ((ev["minute"] - eg["minute"])
+                         if ev["minute"] is not None and eg["minute"] is not None else 0)
+                if abs(d_share) >= 8 or abs(d_min) >= 3:
+                    s = dict(ev)
+                    s["general_share"] = eg["share"]
+                    s["general_minute"] = eg["minute"]
+                    s["d_share"] = d_share
+                    s["d_minute"] = d_min
+                    shifts.append(s)
+            shifts.sort(key=lambda s: -(abs(s["d_share"]) + abs(s["d_minute"]) * 2))
+
+    use_vs = bool(vs and vs["games"] >= MIN_VS_GAMES)
+    shown = vs if use_vs else general
+    out = {
+        "hero_id": hero_id,
+        "months": months,
+        "games": general["games"],
+        "wins": general["wins"],
+        "winrate": general["winrate"],
+        "start": shown["start"],
+        "order": shown["order"],
+        "situational": shown["situational"],
+        "final": shown["final"],
+        "vs": {
+            "enemy_ids": enemy_ids,
+            "games": vs["games"] if vs else 0,
+            "winrate": vs["winrate"] if vs else None,
+            "used": use_vs,
+            "shifts": shifts[:10],
+        } if enemy_ids else None,
+    }
+    return out
 
 
 def pro_match_detail(source, match_id):
@@ -662,8 +723,10 @@ class Handler(BaseHTTPRequestHandler):
                 hero = (q.get("hero") or [None])[0]
                 if not hero:
                     return self._json({"error": "не передан герой"}, 400)
-                months = int((q.get("months") or ["3"])[0])
-                return self._json(hero_build(src, int(hero), months))
+                # база не тянет период больше трёх месяцев - упирается в таймаут
+                months = min(int((q.get("months") or ["3"])[0]), 3)
+                enemies = [int(x) for x in (q.get("enemy") or [""])[0].split(",") if x.strip()]
+                return self._json(hero_build(src, int(hero), months, enemies))
             if url.path == "/api/tournaments/leagues":
                 months = int((q.get("months") or ["3"])[0])
                 return self._json({"leagues": src.tournament_leagues(months)})

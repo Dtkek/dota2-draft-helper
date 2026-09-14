@@ -86,11 +86,32 @@ TTL_MATCH = 7 * 24 * 3600
 TTL_TOURNAMENT = 6 * 3600
 
 
-def _explorer(sql, ttl):
-    """Запрос к базе OpenDota через /explorer с кэшем, как у остальных данных."""
+def _explorer(sql, ttl, retries=3):
+    """Запрос к базе OpenDota через /explorer с кэшем, как у остальных данных.
+
+    У базы лимит около 15 секунд на запрос, и первый запрос по герою
+    в него часто не укладывается: данные читаются с диска «холодными».
+    Замер: два простейших запроса подряд - таймаут, следующие пять по тому
+    же герою - 0.8-3.7 с. То есть первая попытка греет кэш базы, вторая
+    проходит. Поэтому повторяем с паузой, а не упрощаем SQL.
+
+    Ответ с err нельзя ни принимать за пустой результат, ни оставлять
+    в кэше - иначе ошибка живёт шесть часов.
+    """
+    import time as _time
     import urllib.parse
     url = f"{API}/explorer?sql={urllib.parse.quote(' '.join(sql.split()))}"
-    return get_json(url, ttl=ttl, timeout=120)
+    last = None
+    for attempt in range(retries + 1):
+        data = get_json(url, ttl=ttl, timeout=120)
+        err = data.get("err") if isinstance(data, dict) else "не JSON-объект"
+        if not err:
+            return data
+        last = str(err)[:200]
+        net.forget(url)
+        if attempt < retries:
+            _time.sleep(2.0)
+    raise RuntimeError(f"база OpenDota не ответила после {retries + 1} попыток: {last}")
 
 
 class OpenDotaSource(HeroSource):
@@ -296,58 +317,84 @@ class OpenDotaSource(HeroSource):
         }
 
     # --- сборка героя по про-матчам ------------------------------------
-    def hero_builds(self, hero_id, months=3, tier="top"):
+    def hero_builds(self, hero_id, months=3, tier="top", enemy_ids=None):
         """Агрегированные закупы героя в турнирных матчах.
 
         Закупы каждой игры тянуть нельзя: 50 игр - 75 КБ, на слабом канале
         не дойдёт. Агрегируем в базе: для каждого предмета - в скольких
-        играх куплен, сколько раз до рога, медианная секунда покупки.
+        играх куплен, сколько раз до рога, медианная минута первой покупки.
         Ответ - единицы килобайт. Возвращает (покупки, итоговые предметы).
+
+        enemy_ids - сборка ПРОТИВ этих героев. Точных совпадений «пять этих
+        врагов» в про-играх почти нет, поэтому берутся игры, где встречался
+        хотя бы один из них, а вес игры - число совпавших врагов: игра против
+        трёх из списка весит втрое больше, чем против одного. Доли считаются
+        по весу (wgames / total_weight), число игр - по факту.
         """
         hid = int(hero_id)
         tiers = self.TIERS.get(tier, self.TIERS["top"])
         tier_sql = ", ".join(f"'{t}'" for t in tiers)
         period = f"m.start_time > extract(epoch from now() - interval '{int(months)} months')"
 
-        purchases = _explorer(f"""
-            with g as (
-              select pm.match_id, pm.purchase_log,
-                     ((pm.player_slot < 128) = m.radiant_win) as won
-              from player_matches pm
-              join matches m on m.match_id = pm.match_id
-              join leagues l on l.leagueid = m.leagueid
-              where pm.hero_id = {hid} and {period}
-                and l.tier in ({tier_sql}) and pm.purchase_log is not null
-            ),
-            p as (
-              select g.match_id, (e->>'key') as key, (e->>'time')::int as t
-              from g, unnest(g.purchase_log) e
-            )
-            select key,
-              count(distinct match_id) as games,
-              count(distinct case when t <= 0 then match_id end) as start_games,
-              sum(case when t <= 0 then 1 else 0 end)::float
-                / nullif(count(distinct case when t <= 0 then match_id end), 0)
-                as start_per_game,
-              percentile_cont(0.5) within group (order by t) filter (where t > 0)
-                as median_time,
-              (select count(*) from g) as total_games,
-              (select count(*) from g where won) as wins
-            from p group by key order by games desc
-        """, ttl=TTL_TOURNAMENT).get("rows") or []
-
-        final = _explorer(f"""
-            with g as (
-              select pm.item_0, pm.item_1, pm.item_2, pm.item_3, pm.item_4, pm.item_5
+        games_cte = f"""
+            g as (
+              select pm.match_id, pm.purchase_log, (pm.player_slot < 128) as radiant,
+                     ((pm.player_slot < 128) = m.radiant_win) as won,
+                     pm.item_0, pm.item_1, pm.item_2, pm.item_3, pm.item_4, pm.item_5
               from player_matches pm
               join matches m on m.match_id = pm.match_id
               join leagues l on l.leagueid = m.leagueid
               where pm.hero_id = {hid} and {period} and l.tier in ({tier_sql})
+            )"""
+        enemy_ids = [int(e) for e in (enemy_ids or []) if int(e) != hid]
+        if enemy_ids:
+            ids = ", ".join(str(e) for e in enemy_ids)
+            weight_cte = f"""
+            w as (
+              select g.match_id, count(pm2.hero_id) as weight
+              from g join player_matches pm2 on pm2.match_id = g.match_id
+                 and ((pm2.player_slot < 128) <> g.radiant)
+                 and pm2.hero_id in ({ids})
+              group by g.match_id
+            ),
+            gw as (select g.*, w.weight from g join w on w.match_id = g.match_id)"""
+        else:
+            weight_cte = "gw as (select g.*, 1 as weight from g)"
+
+        purchases = _explorer(f"""
+            with {games_cte},
+            {weight_cte},
+            p as (
+              select gw.match_id, gw.weight, (e->>'key') as key, (e->>'time')::int as t
+              from gw, unnest(gw.purchase_log) e
+              where gw.purchase_log is not null
+            ),
+            pk as (
+              select match_id, key, max(weight) as weight,
+                     min(t) filter (where t > 0) as first_time,
+                     count(*) filter (where t <= 0) as start_cnt
+              from p group by match_id, key
             )
-            select item_id, count(*) as games, (select count(*) from g) as total
+            select key,
+              count(*) as games,
+              sum(weight) as wgames,
+              sum(weight) filter (where start_cnt > 0) as wstart,
+              avg(start_cnt) filter (where start_cnt > 0) as start_per_game,
+              percentile_cont(0.5) within group (order by first_time) as median_first,
+              (select count(*) from gw) as total_games,
+              (select sum(weight) from gw) as total_weight,
+              (select count(*) from gw where won) as wins
+            from pk group by key order by wgames desc
+        """, ttl=TTL_TOURNAMENT).get("rows") or []
+
+        final = _explorer(f"""
+            with {games_cte},
+            {weight_cte}
+            select item_id, sum(weight) as wgames,
+                   (select sum(weight) from gw) as total_weight
             from (select unnest(array[item_0, item_1, item_2, item_3, item_4, item_5])
-                  as item_id from g) t
-            where item_id > 0 group by item_id order by games desc limit 20
+                         as item_id, weight from gw) t
+            where item_id > 0 group by item_id order by wgames desc limit 20
         """, ttl=TTL_TOURNAMENT).get("rows") or []
         return purchases, final
 
