@@ -25,6 +25,14 @@ from urllib.parse import urlparse, parse_qs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Русский вывод при перенаправлении в файл на Windows: без этого локальная
+# кодировка (cp1251/cp1252) роняет первый же print с кириллицей
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 import gsi  # noqa: E402
 import net  # noqa: E402
 import scoring  # noqa: E402
@@ -110,7 +118,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-14.4"
+VERSION = "2026-09-14.5"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -1197,13 +1205,26 @@ def main():
     use_window = window.AVAILABLE and not args.no_browser and not args.browser
     if use_window:
         say("Закройте окно, чтобы остановить.")
-        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        server_thread.start()
         try:
             window.run(url, on_top=args.on_top, on_closed=httpd.shutdown)
+            print("\nОстановлено.")
+            return
         except KeyboardInterrupt:
-            pass
-        print("\nОстановлено.")
-        return
+            print("\nОстановлено.")
+            return
+        except Exception as e:  # noqa: BLE001 - окно не критично, есть браузер
+            # на Windows окно может не открыться без WebView2 или .NET;
+            # приложение от этого не должно умирать
+            say(f"  окно не открылось: {type(e).__name__}: {str(e)[:200]}")
+            say("  открываю в браузере. Ctrl+C — остановить.")
+            webbrowser.open(url)
+            try:
+                server_thread.join()
+            except KeyboardInterrupt:
+                print("\nОстановлено.")
+            return
 
     say("Ctrl+C — остановить.")
     if not window.AVAILABLE and not args.no_browser and not args.browser:
@@ -1217,4 +1238,15 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:  # noqa: BLE001
+        # В exe консоль закрывается вместе с процессом, и падение на старте
+        # выглядит как «ничего не произошло». Показываем ошибку и ждём.
+        traceback.print_exc()
+        if getattr(sys, "frozen", False):
+            try:
+                input("\nПриложение упало. Скопируйте текст выше и нажмите Enter…")
+            except EOFError:
+                pass
+        sys.exit(1)
