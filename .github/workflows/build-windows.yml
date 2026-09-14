@@ -90,7 +90,7 @@ jobs:
           if ($log -match "окно не открылось") { throw "окно pywebview не открылось, сработал откат в браузер - см. вывод выше" }
           $data = Join-Path $env:LOCALAPPDATA "Pickline\.cache"
           if (-not (Test-Path $data)) { throw "кэш не создан в $data - данные пишутся не туда" }
-          Write-Host "данные в $data: $((Get-ChildItem $data -Recurse -File | Measure-Object).Count) файлов"
+          Write-Host "данные в ${data}: $((Get-ChildItem $data -Recurse -File | Measure-Object).Count) файлов"
 
       # артефакт - запасная копия для запусков не с main; релиз ниже
       # прикладывает exe сам. Хранилище артефактов иногда отвечает 403
