@@ -10,8 +10,8 @@
 вмешивается: не читает память, ничего не внедряет, не нажимает за вас.
 
 **Windows, без установки:** скачать
-[pickline-windows.zip](https://github.com/Dtkek/pickline/releases/download/latest/pickline-windows.zip),
-распаковать, запустить `pickline.exe`. Python не нужен.
+[pickline.exe](https://github.com/Dtkek/pickline/releases/download/latest/pickline.exe)
+и запустить. Один файл, Python и распаковка не нужны.
 
 **Из исходников (macOS, Linux, Windows):** `python3 app/server.py` —
 стандартной библиотеки Python 3 достаточно; пакеты нужны только для чтения

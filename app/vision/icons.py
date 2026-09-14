@@ -8,10 +8,9 @@
 import os
 
 import net
+from paths import ASSETS_DIR as ASSETS  # где хранить портреты, решает paths.py
 
 CDN = "https://cdn.cloudflare.steamstatic.com"
-ASSETS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                      "assets", "heroes")
 
 
 def portrait_path(hero_id):

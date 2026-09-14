@@ -48,9 +48,14 @@ import net
 HOST = "api.stratz.com"
 PATH = "/graphql"
 
-APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SNAPSHOT = os.path.join(APP_DIR, "data", "stratz_fallback.json.gz")
-TOKEN_FILE = os.path.join(os.path.dirname(APP_DIR), "stratz_token.txt")
+import paths
+
+SNAPSHOT_NAME = "stratz_fallback.json.gz"
+# читаем обновлённую копию, если она есть, иначе снимок из сборки;
+# пишем всегда в папку данных пользователя (в exe рядом с кодом писать нельзя)
+SNAPSHOT = os.path.join(paths.BUNDLED_DATA, SNAPSHOT_NAME)
+SNAPSHOT_UPDATED = os.path.join(paths.UPDATED_DATA, SNAPSHOT_NAME)
+TOKEN_FILE = paths.TOKEN_FILE
 
 # сколько последних недель суммировать в снимке (включая текущую неполную)
 WEEKS = 3
@@ -293,26 +298,42 @@ class StratzMatchups:
 
     name = "STRATZ"
 
-    def __init__(self, path=SNAPSHOT):
-        self.path = path
+    def __init__(self, path=SNAPSHOT, updated_path=SNAPSHOT_UPDATED):
+        # path - снимок из сборки (только чтение), updated_path - куда
+        # пишет фоновое обновление; читается тот из двух, что свежее
+        self.bundled_path = path
+        self.updated_path = updated_path
         self._payload = None
-        self._mtime = None
-        self._refresh_lock = threading.Lock()
-        self._refreshing = False
-        self.refresh_error = None
+        self._loaded_from = None
+
+    @property
+    def path(self):
+        """Тот из снимков, что свежее: обновлённый или из сборки."""
+        candidates = []
+        for p in (self.updated_path, self.bundled_path):
+            try:
+                candidates.append((os.path.getmtime(p), p))
+            except OSError:
+                pass
+        return max(candidates)[1] if candidates else self.bundled_path
+
+    _refresh_lock = threading.Lock()
+    _refreshing = False
+    refresh_error = None
 
     def _load(self):
+        path = self.path
         try:
-            mtime = os.path.getmtime(self.path)
+            mtime = os.path.getmtime(path)
         except OSError:
             self._payload = None
             return None
-        if self._payload is not None and self._mtime == mtime:
+        if self._payload is not None and self._loaded_from == (path, mtime):
             return self._payload
         try:
-            with gzip.open(self.path, "rt", encoding="utf-8") as f:
+            with gzip.open(path, "rt", encoding="utf-8") as f:
                 self._payload = json.load(f)
-            self._mtime = mtime
+            self._loaded_from = (path, mtime)
         except (OSError, ValueError):
             self._payload = None
         return self._payload
@@ -408,7 +429,8 @@ class StratzMatchups:
             client = StratzClient(token)
             try:
                 sys.stderr.write("  STRATZ: снимок устарел, обновляю в фоне\n")
-                write_snapshot(build_snapshot(client), self.path)
+                # пишем в папку данных пользователя: в exe рядом с кодом нельзя
+                write_snapshot(build_snapshot(client), self.updated_path)
                 self.refresh_error = None
                 sys.stderr.write("  STRATZ: снимок обновлён\n")
             except Exception as e:  # noqa: BLE001 - фон не должен ронять сервер

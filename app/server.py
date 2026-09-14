@@ -118,7 +118,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-14.14"
+VERSION = "2026-09-14.15"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -1263,7 +1263,8 @@ def redirect_output_to_log():
     global LOG_PATH
     if not getattr(sys, "frozen", False) or has_console():
         return None
-    path = os.path.join(os.path.dirname(sys.executable), "pickline.log")
+    import paths
+    path = paths.LOG_PATH
     try:
         f = open(path, "w", encoding="utf-8", buffering=1)
     except OSError:

@@ -17,7 +17,8 @@ import time
 import urllib.error
 import urllib.request
 
-CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
+from paths import CACHE_DIR  # noqa: E402 - где хранить кэш, решает paths.py
+
 UA = "pickline/1.0 (personal use)"
 
 # Дочерний curl на Windows без этого флага открывает себе чёрное окно

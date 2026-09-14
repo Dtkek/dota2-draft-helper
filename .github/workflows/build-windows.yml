@@ -1,10 +1,10 @@
-# Сборка готового приложения для Windows: один архив, внутри exe со всем
-# нужным (Python, OpenCV, numpy, mss). На машине пользователя ничего
-# ставить не надо - распаковать и запустить.
+# Сборка готового приложения для Windows: один файл pickline.exe со всем
+# нужным внутри (Python, OpenCV, numpy, mss, pywebview). На машине
+# пользователя ничего ставить и распаковывать не надо.
 #
 # Собирается на каждый push в main и обновляет релиз с тегом latest:
 # https://github.com/Dtkek/pickline/releases/tag/latest
-# Файл: pickline-windows.zip
+# Файл: pickline.exe
 name: Сборка для Windows
 
 on:
@@ -31,14 +31,14 @@ jobs:
           python -m pip install pyinstaller numpy opencv-python-headless mss certifi pywebview
 
       - name: PyInstaller
-        # onedir, а не onefile: приложение пишет рядом с собой кэш API,
-        # скачанные портреты и конфиг GSI - при onefile они бы терялись
-        # при каждом запуске (распаковка во временную папку).
-        # --windowed: без чёрного окна консоли. Вывод при этом идёт в
-        # pickline.log рядом с exe, падение - в окно сообщения
-        # (см. redirect_output_to_log и message_box в server.py).
+        # onefile: один pickline.exe без папки рядом. При запуске он
+        # распаковывается во временную папку, поэтому всё, что приложение
+        # пишет (кэш, портреты, хранилище окна, обновлённые снимки), живёт
+        # в %LOCALAPPDATA%\Pickline - см. app/paths.py. Лог - рядом с exe.
+        # --windowed: без чёрного окна консоли; вывод в pickline.log,
+        # падение - в окно сообщения (redirect_output_to_log, message_box).
         run: >
-          pyinstaller --noconfirm --clean --onedir --windowed
+          pyinstaller --noconfirm --clean --onefile --windowed
           --icon app/icon.ico
           --name pickline
           --paths app
@@ -58,24 +58,22 @@ jobs:
         # exe должен подняться и ответить по HTTP, иначе сборка бесполезна.
         # Запускается как у пользователя: с окном (не --no-browser), из
         # папки с кириллицей в пути и с меткой «скачано из интернета» на
-        # файлах - и то, и другое ломало окно, и ловиться это должно
-        # здесь, а не на его машине. Вывод exe печатается целиком;
-        # откат окна в браузер считается провалом.
+        # самом exe. Вывод exe печатается целиком; откат окна в браузер
+        # считается провалом. Отдельно проверяется, что данные легли в
+        # %LOCALAPPDATA%\Pickline, а не во временную папку распаковки.
         shell: pwsh
         run: |
-          $dir = Join-Path $env:RUNNER_TEMP "Рабочий стол\pickline"
-          Copy-Item -Recurse dist\pickline $dir
-          # ровно то, что делает проводник с файлами из скачанного архива:
-          # без этого проверка гоняла «чистую» сборку и проблему не видела
-          Get-ChildItem $dir -Recurse -File | ForEach-Object {
-            Set-Content -Path $_.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
-          }
-          # exe без консоли пишет вывод сам - в pickline.log рядом с собой.
+          $dir = Join-Path $env:RUNNER_TEMP "Рабочий стол"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $exe = Join-Path $dir "pickline.exe"
+          Copy-Item dist\pickline.exe $exe
+          # ровно то, что делает браузер со скачанным файлом
+          Set-Content -Path $exe -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
           # -NoNewWindow: запуск через CreateProcess, а не ShellExecute - иначе
           # на помеченном exe всплывает предупреждение SmartScreen, на раннере
           # его некому нажать, и запуск отменяется («canceled by the user»)
-          $p = Start-Process -FilePath (Join-Path $dir "pickline.exe") -ArgumentList "--port","8791" -PassThru -NoNewWindow
-          Start-Sleep -Seconds 15
+          $p = Start-Process -FilePath $exe -ArgumentList "--port","8791" -PassThru -NoNewWindow
+          Start-Sleep -Seconds 25
           try {
             if ($p.HasExited) { throw "exe завершился с кодом $($p.ExitCode) до проверки" }
             $r = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:8791/api/heroes"
@@ -90,22 +88,18 @@ jobs:
           $log = Get-Content (Join-Path $dir "pickline.log") -Raw -ErrorAction SilentlyContinue
           if (-not $log) { throw "exe не создал pickline.log - вывод без консоли не перенаправился" }
           if ($log -match "окно не открылось") { throw "окно pywebview не открылось, сработал откат в браузер - см. вывод выше" }
-
-      - name: Архив
-        shell: pwsh
-        run: |
-          Copy-Item README.md dist\pickline\README.md -ErrorAction SilentlyContinue
-          Copy-Item app\README.md dist\pickline\README-приложение.md
-          Compress-Archive -Path dist\pickline -DestinationPath pickline-windows.zip
+          $data = Join-Path $env:LOCALAPPDATA "Pickline\.cache"
+          if (-not (Test-Path $data)) { throw "кэш не создан в $data - данные пишутся не туда" }
+          Write-Host "данные в $data: $((Get-ChildItem $data -Recurse -File | Measure-Object).Count) файлов"
 
       # артефакт - запасная копия для запусков не с main; релиз ниже
-      # прикладывает архив сам. Хранилище артефактов иногда отвечает 403
+      # прикладывает exe сам. Хранилище артефактов иногда отвечает 403
       # на финализацию - из-за этого один раз падала вся сборка
       - uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
           name: pickline-windows
-          path: pickline-windows.zip
+          path: dist/pickline.exe
 
       # релиз и на push, и на ручной запуск: через dispatch сборку
       # запускает обновление снимка STRATZ (update-snapshots.yml)
@@ -123,5 +117,6 @@ jobs:
           name: Последняя сборка
           body: |
             Автоматическая сборка из main (${{ github.sha }}).
-            Распаковать архив и запустить `pickline.exe` - Python не нужен.
-          files: pickline-windows.zip
+            Один файл: скачать `pickline.exe` и запустить - Python и распаковка не нужны.
+            Данные приложения (кэш, портреты, настройки) - в `%LOCALAPPDATA%\Pickline`, лог - рядом с exe.
+          files: dist/pickline.exe
