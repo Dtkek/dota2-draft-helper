@@ -129,4 +129,14 @@ def run(url, title="Pickline", on_top=False, on_closed=None, log=None):
     )
     if on_closed is not None:
         win.events.closed += on_closed
-    webview.start()
+    # Не приватный режим: по умолчанию pywebview открывает окно как
+    # «инкогнито», и localStorage страницы стирается при закрытии - у
+    # пользователя каждый запуск сбрасывал аккаунт Steam, выбор источника
+    # и список «не предлагать». Хранилище - в папке приложения рядом с
+    # кэшем API (в exe это _internal/.cache).
+    storage = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache", "webview")
+    try:
+        os.makedirs(storage, exist_ok=True)
+    except OSError:
+        storage = None
+    webview.start(private_mode=False, storage_path=storage)
