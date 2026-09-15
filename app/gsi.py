@@ -34,7 +34,16 @@ _state = {
     "hero_id": None,
     "player_name": None,
     "steamid": None,
+    # номер слота в команде, если игра его сообщает (player.team_slot /
+    # player.player_slot): по нему можно понять, какой слот в верхней
+    # полосе драфта ваш. Вживую в драфте не проверено - см. лог
+    "team_slot": None,
+    "player_slot": None,
 }
+
+# что игра присылает в блоке player на стадии выбора героя: пишется в лог
+# один раз за запуск, чтобы узнать, есть ли там номер слота
+_draft_player_logged = False
 
 
 def config_text(port, token="drafthelper"):
@@ -66,6 +75,7 @@ def handle(payload):
     """Обновляет состояние по присланному игрой JSON."""
     if not isinstance(payload, dict):
         return
+    global _draft_player_logged
     hero = payload.get("hero") or {}
     player = payload.get("player") or {}
     game_map = payload.get("map") or {}
@@ -80,6 +90,18 @@ def handle(payload):
             _state["player_name"] = player["name"]
         if player.get("steamid"):
             _state["steamid"] = str(player["steamid"])
+        for key in ("team_slot", "player_slot"):
+            if player.get(key) is not None:
+                _state[key] = player[key]
+        # первое сообщение стадии выбора героя - целиком блок player в лог:
+        # по нему видно, сообщает ли игра номер слота
+        if (game_map.get("game_state") == "DOTA_GAMERULES_STATE_HERO_SELECTION"
+                and player and not _draft_player_logged):
+            _draft_player_logged = True
+            import json
+            import sys
+            sys.stderr.write("  GSI: блок player на стадии выбора героя: "
+                             + json.dumps(player, ensure_ascii=False)[:600] + "\n")
         # герой появляется, когда выбран; между играми блок пустой
         if hero.get("name"):
             _state["hero_name"] = hero["name"]
