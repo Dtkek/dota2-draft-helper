@@ -282,6 +282,11 @@ _refreshing = set()
 _refresh_lock = threading.Lock()
 
 
+# url -> когда фоновое обновление в последний раз не удалось
+_refresh_failed_at = {}
+REFRESH_RETRY_AFTER = 15 * 60
+
+
 def refresh_in_background(url, ttl=3600):
     """Обновляет кэш по-тихому, не задерживая ответ пользователю.
 
@@ -293,13 +298,24 @@ def refresh_in_background(url, ttl=3600):
     with _refresh_lock:
         if url in _refreshing:
             return None
+        # после неудачи - пауза: на медленном канале heroStats не докачивался
+        # за 45 с, и попытка повторялась каждые несколько минут впустую
+        if time.time() - _refresh_failed_at.get(url, 0) < REFRESH_RETRY_AFTER:
+            return None
         _refreshing.add(url)
 
     def worker():
         try:
-            get_json(url, ttl=0)
-        except Exception:  # noqa: BLE001 — фоновое обновление не критично
-            pass
+            get_json(url, ttl=0, stale_ok=False)
+            _refresh_failed_at.pop(url, None)
+        except Exception as e:  # noqa: BLE001 — фоновое обновление не критично
+            _refresh_failed_at[url] = time.time()
+            text = str(e)[:200]
+            if _last_error.get(url) != text:
+                sys.stderr.write(f"  сеть: фоновое обновление не удалось ({text}); "
+                                 f"следующая попытка через {REFRESH_RETRY_AFTER // 60} мин, "
+                                 f"пока копия из кэша: {url}\n")
+            _last_error[url] = text
         finally:
             with _refresh_lock:
                 _refreshing.discard(url)
