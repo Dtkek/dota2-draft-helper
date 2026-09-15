@@ -118,7 +118,7 @@ CDN = "https://cdn.cloudflare.steamstatic.com"
 
 # Версия показывается в консоли и в шапке страницы: когда что-то идёт не так,
 # первым делом нужно понять, какой код на самом деле запущен.
-VERSION = "2026-09-14.16"
+VERSION = "2026-09-15.1"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -194,6 +194,73 @@ def ids_for_position(position):
     except (TypeError, ValueError):
         return None
     return {hid for hid, pos in hero_positions().items() if want in pos}
+
+
+# насколько занятая союзником позиция всё ещё возможна для вас: не ноль,
+# потому что справочник позиций неточен, а в пабе роли путают - но близко
+# к нулю: если в команде уже есть керри, вы не керри, какой бы ни была
+# ваша история. При 0.12 привычка «55% игр на керри» перевешивала занятость
+OCCUPIED_KEEP = 0.03
+# история сглаживается корнем: это подсказка, а не улика; иначе один
+# любимый герой решает всё, даже когда его позиция уже занята
+PRIOR_TEMPER = 0.5
+
+
+def guess_position(ally_ids, player_heroes=None):
+    """Какую позицию, скорее всего, играете вы: по союзникам и своей истории.
+
+    Игра свою роль из очереди не сообщает, значок роли на экране слишком
+    мелкий - поэтому вывод, а не знание. Две подсказки:
+
+    1. Союзники, которые уже взяты: их позиции (по справочнику из
+       про-матчей) считаются занятыми. Герой на нескольких позициях
+       занимает каждую частично.
+    2. История аккаунта: на ком вы играете чаще, на тех позициях вы и
+       играете. Без аккаунта - все позиции равновероятны.
+
+    Возвращает (позиция, пояснение, {позиция: вероятность}). Позиция None,
+    если решить не по чему (нет ни союзников, ни истории).
+    """
+    positions = hero_positions()
+
+    occupied = {p: 0.0 for p in range(1, 6)}
+    for hid in ally_ids:
+        pos = positions.get(int(hid)) or []
+        for p in pos:
+            occupied[p] = min(1.0, occupied[p] + 1.0 / len(pos))
+
+    prior = {p: 0.0 for p in range(1, 6)}
+    games_total = 0
+    for r in player_heroes or []:
+        g = int(r.get("games") or 0)
+        pos = positions.get(int(r.get("hero_id") or 0)) or []
+        if not g or not pos:
+            continue
+        games_total += g
+        for p in pos:
+            prior[p] += g / len(pos)
+    if games_total:
+        prior = {p: v / games_total for p, v in prior.items()}
+    else:
+        prior = {p: 0.2 for p in prior}
+
+    score = {p: (prior[p] ** PRIOR_TEMPER) * max(OCCUPIED_KEEP, 1.0 - occupied[p])
+             for p in prior}
+    total = sum(score.values())
+    if not total or (not ally_ids and not games_total):
+        return None, "не по чему определить: нет ни союзников, ни истории аккаунта", {}
+    probs = {p: round(v / total, 3) for p, v in score.items()}
+    best = max(probs, key=probs.get)
+
+    taken = [str(p) for p in range(1, 6) if occupied[p] >= 0.5]
+    parts = []
+    if taken:
+        parts.append("союзники заняли " + ", ".join(taken))
+    if games_total:
+        fav = max(prior, key=prior.get)
+        parts.append(f"вы чаще всего играете {fav} ({round(prior[fav] * 100)}% игр)")
+    reason = "; ".join(parts) if parts else "по союзникам"
+    return best, reason, probs
 
 
 def resolve_bracket(source, requested):
@@ -1084,6 +1151,19 @@ class Handler(BaseHTTPRequestHandler):
                 # синергия берутся из его снимка; всё остальное - как обычно.
                 matchup_source = (data.get("matchup_source") or "opendota").lower()
                 position = data.get("position")
+
+                # «Авто»: позицию выводим из союзников и истории аккаунта.
+                # История - из кэша без ожидания сети; нет её - только союзники
+                position_auto = None
+                if position == "auto":
+                    ph_for_guess = None
+                    acc_g, _ = parse_account(str(data.get("account") or ""))
+                    if acc_g:
+                        ph_for_guess = src.player_heroes(acc_g, fast=True)
+                    guessed, reason, probs = guess_position(
+                        [int(x) for x in (data.get("ally") or [])], ph_for_guess)
+                    position = str(guessed) if guessed else ""
+                    position_auto = {"position": guessed, "reason": reason, "probabilities": probs}
                 stratz_bound, base_stats, allowed_ids = None, None, ids_for_position(position)
                 if matchup_source == "stratz":
                     stz = get_stratz()
@@ -1197,6 +1277,8 @@ class Handler(BaseHTTPRequestHandler):
                     "personal_note": personal_note,
                     # что-то ещё считается в фоне - страница повторит запрос
                     "pending": bool(tour_pending or personal_pending),
+                    "position_used": position or None,
+                    "position_auto": position_auto,
                 })
 
             if url.path.startswith("/api/vision/"):

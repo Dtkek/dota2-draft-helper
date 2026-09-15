@@ -165,7 +165,11 @@ async function boot() {
     fillSelect($('#meta-bracket'), state.brackets.map((b) => [b.key, b.label]));
     const posOptions = [['', 'Любая']]
       .concat((data.positions || []).map((p) => [p.key, p.label]));
-    fillSelect($('#position'), posOptions);
+    state.positions = Object.fromEntries((data.positions || []).map((p) => [p.key, p.label]));
+    // «Авто» - только в подборе: позиция выводится из союзников и истории
+    // аккаунта (игра свою роль не сообщает)
+    fillSelect($('#position'), [['', 'Любая'], ['auto', 'Авто — по союзникам и истории']]
+      .concat((data.positions || []).map((p) => [p.key, p.label])));
     fillSelect($('#meta-position'), posOptions);
     fillSelect($('#tour-position'), posOptions);
 
@@ -407,6 +411,25 @@ function renderRecommendations(out, data) {
   const rows = data.rows;
   out.innerHTML = '';
   if (data.note) out.appendChild(el('div', 'error', 'Внимание: ' + data.note));
+  // позиция определена автоматически: сказать, какая и почему, и дать
+  // поправить рукой - это вывод, а не знание
+  if (data.position_auto) {
+    const pa = data.position_auto;
+    const line = el('div', pa.position ? 'note' : 'dim');
+    line.style.marginBottom = '6px';
+    if (pa.position) {
+      const label = (state.positions || {})[String(pa.position)] || String(pa.position);
+      line.textContent = `Позиция определена автоматически: ${label} — ${pa.reason}. ` +
+        'Не так? Выберите позицию в списке.';
+      const probs = Object.entries(pa.probabilities || {})
+        .sort((a, b) => b[1] - a[1]).map(([p, v]) => `${p}: ${Math.round(v * 100)}%`).join(', ');
+      line.title = 'Вероятности по позициям: ' + probs;
+    } else {
+      line.textContent = 'Позицию определить не по чему (' + pa.reason + ') — показаны все позиции. ' +
+        'Отметьте союзников или подключите аккаунт.';
+    }
+    out.appendChild(line);
+  }
   // «считается в фоне» - не ошибка, показываем приглушённо
   const noteCls = data.pending ? 'dim' : 'error';
   if (data.tour_note) out.appendChild(el('div', noteCls, data.tour_note));
