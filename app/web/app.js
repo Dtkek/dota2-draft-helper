@@ -166,9 +166,9 @@ async function boot() {
     const posOptions = [['', 'Любая']]
       .concat((data.positions || []).map((p) => [p.key, p.label]));
     state.positions = Object.fromEntries((data.positions || []).map((p) => [p.key, p.label]));
-    // «Авто» - только в подборе: позиция выводится из союзников и истории
-    // аккаунта (игра свою роль не сообщает)
-    fillSelect($('#position'), [['', 'Любая'], ['auto', 'Авто — по союзникам и истории']]
+    // «Авто» - только в подборе: свободные позиции считаются по союзникам,
+    // которых видно на экране или отмечено рукой (игра свою роль не сообщает)
+    fillSelect($('#position'), [['', 'Любая'], ['auto', 'Авто — по союзникам на экране']]
       .concat((data.positions || []).map((p) => [p.key, p.label])));
     fillSelect($('#meta-position'), posOptions);
     fillSelect($('#tour-position'), posOptions);
@@ -415,18 +415,18 @@ function renderRecommendations(out, data) {
   // поправить рукой - это вывод, а не знание
   if (data.position_auto) {
     const pa = data.position_auto;
-    const line = el('div', pa.position ? 'note' : 'dim');
+    const line = el('div', pa.positions ? 'note' : 'dim');
     line.style.marginBottom = '6px';
-    if (pa.position) {
-      const label = (state.positions || {})[String(pa.position)] || String(pa.position);
-      line.textContent = `Позиция определена автоматически: ${label} — ${pa.reason}. ` +
+    const label = (p) => (state.positions || {})[String(p)] || String(p);
+    if (pa.positions && pa.positions.length === 1) {
+      line.textContent = `Позиция по союзникам: ${label(pa.positions[0])} — ${pa.reason}. ` +
         'Не так? Выберите позицию в списке.';
-      const probs = Object.entries(pa.probabilities || {})
-        .sort((a, b) => b[1] - a[1]).map(([p, v]) => `${p}: ${Math.round(v * 100)}%`).join(', ');
-      line.title = 'Вероятности по позициям: ' + probs;
+    } else if (pa.positions) {
+      line.textContent = `Свободные позиции: ${pa.positions.map(label).join(', ')} — ${pa.reason}. ` +
+        'Показаны герои всех свободных; уточните позицию в списке.';
     } else {
-      line.textContent = 'Позицию определить не по чему (' + pa.reason + ') — показаны все позиции. ' +
-        'Отметьте союзников или подключите аккаунт.';
+      line.textContent = 'Союзники ещё не взяты — показаны все позиции. ' +
+        'Как только появятся союзники на экране, позиции сузятся.';
     }
     out.appendChild(line);
   }
